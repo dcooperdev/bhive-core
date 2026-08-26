@@ -4,8 +4,10 @@
   "description": "Hive - Multi-Agent AI Framework with a Provider Pattern architecture and a secure agent-to-agent communication protocol (signing, encryption, prompt-injection defense, attestation, audit logging)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": ["dist"],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
