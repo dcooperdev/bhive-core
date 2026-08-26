@@ -10,7 +10,7 @@ Signing and encryption are both opt-in per `BeeManager`, and apply to
 every delegation that manager coordinates:
 
 ```typescript
-import { BeeManager, createDelegationTool } from '@hiveai/core';
+import { BeeManager, createDelegationTool } from 'bhive';
 
 const beeManager = new BeeManager('gemini-1.5-flash', {
   apiKey: process.env.GOOGLE_API_KEY,
@@ -46,7 +46,7 @@ signing/encryption/attestation pipeline runs transparently inside
 ## Configuring per-Bee security context
 
 ```typescript
-import { BeeManager, BeeSecurityContext } from '@hiveai/core';
+import { BeeManager, BeeSecurityContext } from 'bhive';
 
 const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: process.env.GOOGLE_API_KEY });
 
@@ -84,7 +84,7 @@ use directly wherever else you handle untrusted text (e.g. before
 storing it, or before it reaches a different LLM call entirely):
 
 ```typescript
-import { PromptInjectionDetector } from '@hiveai/core';
+import { PromptInjectionDetector } from 'bhive';
 
 const detector = new PromptInjectionDetector();
 
@@ -108,7 +108,7 @@ audit entry whenever any pattern matches - regardless of risk score.
 ## Verifying attestation chains
 
 ```typescript
-import { AttestationChainService, verifyAttestationChain } from '@hiveai/core';
+import { AttestationChainService, verifyAttestationChain } from 'bhive';
 
 // Via BeeManager, once signing/encryption is enabled:
 const chain = await beeManager.getAttestationChain();
@@ -126,7 +126,7 @@ without recomputing its hash - i.e. tampering).
 ## mTLS configuration
 
 ```typescript
-import { loadMTLSConfigFromEnv, loadMTLSConfigFromFiles, validateCertificateChain, toRedisTLSOptions } from '@hiveai/core';
+import { loadMTLSConfigFromEnv, loadMTLSConfigFromFiles, validateCertificateChain, toRedisTLSOptions } from 'bhive';
 
 // From environment variables (HIVE_MTLS_CA/CERT/KEY holding PEM content):
 const fromEnv = loadMTLSConfigFromEnv();

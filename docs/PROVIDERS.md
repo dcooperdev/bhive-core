@@ -18,7 +18,7 @@ against the interface and pass an instance into `BeeManager`/`createBee`
 ## LLMAdapter
 
 ```typescript
-import { LLMAdapter } from '@hiveai/core';
+import { LLMAdapter } from 'bhive';
 
 class OpenAIAdapter implements LLMAdapter {
   readonly name = 'openai';
@@ -66,7 +66,7 @@ Backs the Bee queue (and anything else you want to persist). Needs a
 plain key/value store plus a FIFO list:
 
 ```typescript
-import { StorageProvider } from '@hiveai/core';
+import { StorageProvider } from 'bhive';
 import { createClient } from 'redis';
 
 class RedisStorage implements StorageProvider {
@@ -123,7 +123,7 @@ No built-in implementation ships (it's a thin, storage-shaped
 interface — reuse your `StorageProvider`'s backend if you have one):
 
 ```typescript
-import { ContextProvider } from '@hiveai/core';
+import { ContextProvider } from 'bhive';
 
 class RedisContext implements ContextProvider {
   readonly name = 'redis';
@@ -143,7 +143,7 @@ restarts, if the backend is durable).
 ## EventBus (EventPublisher + EventSubscriber)
 
 ```typescript
-import { EventBus, BeeEventHandler } from '@hiveai/core';
+import { EventBus, BeeEventHandler } from 'bhive';
 
 class KafkaEventBus implements EventBus {
   readonly name = 'kafka';

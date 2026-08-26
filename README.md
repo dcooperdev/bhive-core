@@ -19,7 +19,7 @@ Start building for production.
 ## Quick Start
 
 ### 1. Install Dependencies
-`npm install`
+`npm install bhive`
 
 ### 2. Setup .env
 `cp .env.example .env`
@@ -35,7 +35,7 @@ Start building for production.
 ## Usage
 
 ```typescript
-import { BeeManager } from '@hiveai/core';
+import { BeeManager } from 'bhive';
 
 // No providers given: BeeManager falls back to a GeminiAdapter and a
 // plain in-memory queue, no configuration required.
@@ -56,7 +56,7 @@ beeManager.restart('gemini-1.5-pro');
 ### Injecting providers
 
 ```typescript
-import { BeeManager, InMemoryStorage, InMemoryEventBus } from '@hiveai/core';
+import { BeeManager, InMemoryStorage, InMemoryEventBus } from 'bhive';
 
 const beeManager = new BeeManager('gemini-1.5-flash', {
   apiKey: process.env.GOOGLE_API_KEY,
@@ -84,7 +84,7 @@ no `executeTask()` orchestration required. Attach a delegation tool and
 let the LLM decide when to use it:
 
 ```typescript
-import { BeeManager, createDelegationTool } from '@hiveai/core';
+import { BeeManager, createDelegationTool } from 'bhive';
 
 const beeManager = new BeeManager('gemini-1.5-flash');
 

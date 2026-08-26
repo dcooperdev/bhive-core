@@ -74,7 +74,7 @@ own outbound message after the fact.
 ## Enabling the protocol
 
 ```typescript
-import { BeeManager } from '@hiveai/core';
+import { BeeManager } from 'bhive';
 
 const beeManager = new BeeManager('gemini-1.5-flash', {
   apiKey: process.env.GOOGLE_API_KEY,
@@ -113,7 +113,7 @@ For securing the *transport* to a real backend (Redis, Kafka, a
 WebSocket EventBus) rather than the agent-to-agent payload itself:
 
 ```typescript
-import { loadMTLSConfigFromFiles, toRedisTLSOptions } from '@hiveai/core';
+import { loadMTLSConfigFromFiles, toRedisTLSOptions } from 'bhive';
 
 const mtls = loadMTLSConfigFromFiles({
   ca: '/etc/hive/certs/ca.pem',
@@ -129,7 +129,7 @@ Or from environment variables holding PEM content directly
 `HIVE_MTLS_REJECT_UNAUTHORIZED=false` for local development only):
 
 ```typescript
-import { loadMTLSConfigFromEnv } from '@hiveai/core';
+import { loadMTLSConfigFromEnv } from 'bhive';
 
 const mtls = loadMTLSConfigFromEnv(); // undefined if any of the three are missing
 ```
