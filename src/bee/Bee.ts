@@ -8,13 +8,18 @@ import {
   BeeEventType,
   QueueConfig,
   ToolExecutionContext,
-  TrustLevel
+  TrustLevel,
+  BeeIdentity
 } from '../types';
 import { LLMAdapter } from '../providers/LLMAdapter';
 import { StorageProvider } from '../providers/StorageProvider';
 import { ContextProvider } from '../providers/ContextProvider';
 import { EventPublisher } from '../providers/EventBus';
 import { BeeConfig, ModelLimits } from './BeeConfig';
+import { BeeSecurityContext } from './BeeSecurityContext';
+import { BeeIdentityManager } from './BeeIdentityManager';
+import { PromptInjectionDetector } from '../security/PromptInjectionDetector';
+import { AuditLog } from '../security/AuditLog';
 import type { BeeManager } from './BeeManager';
 
 export interface BeeProviderOptions {
@@ -25,10 +30,16 @@ export interface BeeProviderOptions {
   queueConfig?: QueueConfig;
   /** Set by BeeManager.createBee() so the Bee can discover/delegate to its siblings. */
   beeManager?: BeeManager;
-  /** How freely this Bee may delegate to other agents. Defaults to 'open'. */
+  /** How freely this Bee may delegate to other agents. Defaults to 'open'. Ignored when `securityContext` is given. */
   trustLevel?: TrustLevel;
-  /** Required when trustLevel is 'careful': the only agent names this Bee may delegate to. */
+  /** Required when trustLevel is 'careful': the only agent names this Bee may delegate to. Ignored when `securityContext` is given. */
   allowedDelegates?: string[];
+  /** Full security policy (whitelist, rate limits, tool restrictions, trust level, isolation). Overrides trustLevel/allowedDelegates when given. */
+  securityContext?: BeeSecurityContext;
+  /** Shared identity registry. Set by BeeManager.createBee() so Bees can verify/encrypt to each other; defaults to a private instance otherwise. */
+  identityManager?: BeeIdentityManager;
+  /** Set by BeeManager.createBee() so injection detections are recorded centrally too. */
+  auditLog?: AuditLog;
 }
 
 interface QueueItem {
@@ -63,8 +74,11 @@ export class Bee {
   private queueConfig: QueueConfig;
 
   private beeManager?: BeeManager;
-  private trustLevel: TrustLevel;
-  private allowedDelegates: string[];
+  private securityContext: BeeSecurityContext;
+  private identityManager: BeeIdentityManager;
+  private identity: BeeIdentity;
+  private auditLog?: AuditLog;
+  private injectionDetector = new PromptInjectionDetector();
 
   private config: ModelLimits;
   private lastRequestTime = 0;
@@ -94,8 +108,15 @@ export class Bee {
     this.contextProvider = options.contextProvider;
     this.queueConfig = options.queueConfig ?? {};
     this.beeManager = options.beeManager;
-    this.trustLevel = options.trustLevel ?? 'open';
-    this.allowedDelegates = options.allowedDelegates ?? [];
+    this.securityContext =
+      options.securityContext ??
+      new BeeSecurityContext({
+        trustLevel: options.trustLevel ?? 'open',
+        allowedDelegates: options.allowedDelegates ?? []
+      });
+    this.identityManager = options.identityManager ?? new BeeIdentityManager();
+    this.identity = this.identityManager.registerBeeIdentity(this);
+    this.auditLog = options.auditLog;
 
     if (this.queueConfig.persist && !this.storageProvider) {
       console.log(
@@ -160,6 +181,16 @@ export class Bee {
     return this.beeManager.getRegisteredAgents().filter(name => name !== this.name);
   }
 
+  /** This Bee's RSA identity (public key openly shareable, private key never leaves the identityManager). */
+  getIdentity(): BeeIdentity {
+    return this.identity;
+  }
+
+  /** This Bee's security policy (delegation whitelist, rate limits, tool restrictions, trust level). */
+  getSecurityContext(): BeeSecurityContext {
+    return this.securityContext;
+  }
+
   /**
    * Delegates a task to another agent registered with the same
    * BeeManager, and resolves with that agent's output. Requires this
@@ -172,14 +203,20 @@ export class Bee {
       );
     }
 
-    if (this.trustLevel === 'strict') {
-      throw new Error(`Bee "${this.name}" has trustLevel "strict" and cannot delegate to other agents`);
-    }
+    if (!this.securityContext.isAllowedDelegate(agentName)) {
+      await this.emitEvent('security:unauthorized_delegation', { agentName, trustLevel: this.securityContext.trustLevel });
+      await this.auditLog?.record({
+        beeName: this.name,
+        type: 'unauthorized_delegation',
+        detail: `Blocked delegation to "${agentName}" (trustLevel "${this.securityContext.trustLevel}")`
+      });
 
-    if (this.trustLevel === 'careful' && !this.allowedDelegates.includes(agentName)) {
-      throw new Error(
-        `Bee "${this.name}" (trustLevel "careful") is not allowed to delegate to "${agentName}"`
-      );
+      const message =
+        this.securityContext.trustLevel === 'strict'
+          ? `Bee "${this.name}" has trustLevel "strict" and cannot delegate to other agents`
+          : `Bee "${this.name}" (trustLevel "careful") is not allowed to delegate to "${agentName}"`;
+
+      throw new Error(message);
     }
 
     return this.beeManager.delegateToAgent(this.name, agentName, task, chain);
@@ -241,6 +278,21 @@ export class Bee {
 
   private async executeWithRateLimit(input: string, delegationChain: string[]): Promise<string> {
     await this.applyDelay();
+
+    const safePrompt = this.injectionDetector.detectInjection(input);
+    if (safePrompt.patterns.length > 0) {
+      await this.emitEvent('security:injection_detected', {
+        injectionRisk: safePrompt.injectionRisk,
+        patterns: safePrompt.patterns
+      });
+      await this.auditLog?.record({
+        beeName: this.name,
+        type: 'injection_detected',
+        detail: `risk=${safePrompt.injectionRisk.toFixed(2)}`,
+        metadata: { patterns: safePrompt.patterns }
+      });
+    }
+
     await this.emitEvent('run:start', { input });
 
     console.log(`\n[${this.name}] Running...`);
@@ -249,7 +301,9 @@ export class Bee {
     const history = await this.loadContext();
     const messages: Message[] = [
       ...history,
-      { role: 'user', content: `${this.prompt}\n\nTask: ${input}` }
+      // The LLM only ever sees the sanitized text; `input`/AgentRun.input
+      // still record what was actually requested, for audit purposes.
+      { role: 'user', content: `${this.prompt}\n\nTask: ${safePrompt.sanitized}` }
     ];
 
     const toolContext: ToolExecutionContext = {

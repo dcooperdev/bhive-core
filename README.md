@@ -4,13 +4,14 @@ Multi-Agent Framework for Production.
 
 Your agents. Your infrastructure.
 
-✅ Queue-based concurrency (no DAGs, no state machines)
-✅ Storage-agnostic (Redis, Mongo, SQL—your choice)
-✅ Event-driven architecture (Kafka, WebSocket, etc)
-✅ LLM-agnostic (Gemini, OpenAI, Anthropic, local)
-✅ Agent-to-agent delegation (subagents, ConnectOnion-style)
-✅ Kubernetes-ready, day 1
-✅ Distributed from the start
+✅ Queue-based concurrency (no DAGs, no state machines)  
+✅ Storage-agnostic (Redis, Mongo, SQL—your choice)  
+✅ Event-driven architecture (Kafka, WebSocket, etc)  
+✅ LLM-agnostic (Gemini, OpenAI, Anthropic, local)  
+✅ Agent-to-agent delegation (subagents, ConnectOnion-style)  
+✅ Secure by default: signed, encrypted, injection-resistant agent messages  
+✅ Kubernetes-ready, day 1  
+✅ Distributed from the start  
 
 Stop building for single-instance.
 Start building for production.
@@ -110,10 +111,36 @@ rejected instead of looping forever, and a Bee's `trustLevel` can
 restrict who it's allowed to delegate to at all. See
 [docs/DELEGATION.md](./docs/DELEGATION.md) and [docs/TRUST.md](./docs/TRUST.md).
 
+### Secure agent communication
+
+Every delegation already runs through a security pipeline - sender
+whitelist/rate-limit checks and prompt-injection scanning happen
+unconditionally, with permissive defaults so nothing changes until you
+opt in. Turn on signing and end-to-end encryption per `BeeManager`:
+
+```typescript
+const beeManager = new BeeManager('gemini-1.5-flash', {
+  apiKey: process.env.GOOGLE_API_KEY,
+  securityOptions: { enableSigning: true, enableEncryption: true, trustLevel: 'careful' }
+});
+```
+
+Every Bee gets an RSA-2048 identity automatically. Signed messages use
+HMAC-SHA256 with nonce/timestamp replay protection; encrypted messages
+use hybrid RSA-OAEP + AES-256-GCM so only the intended recipient can
+ever decrypt. Every hop is chained into a tamper-evident SHA-256
+attestation chain and recorded to an `AuditLog`. See
+[docs/SECURITY.md](./docs/SECURITY.md) for the full threat model,
+[docs/SECURITY_EXAMPLES.md](./docs/SECURITY_EXAMPLES.md) for complete
+examples, and [docs/HACKING_LAB.md](./docs/HACKING_LAB.md) to watch
+each attack (interception, forgery, injection, replay, escalation)
+actually get caught.
+
 ## Features
 - Auto-detected rate limits, delays, and timeouts per model (`BeeConfig`)
 - **Provider Pattern**: `LLMAdapter`, `StorageProvider`, `ContextProvider`, `EventPublisher`/`EventSubscriber` — Hive depends only on these interfaces, never on a concrete backend
 - **Agent-to-agent delegation**: `Bee.delegateTo()` / `BeeManager.delegateToAgent()` / `createDelegationTool()`, with circular-delegation detection and per-Bee `trustLevel`
+- **Secure agent communication**: HMAC-SHA256 signing with replay protection, hybrid RSA-OAEP + AES-256-GCM end-to-end encryption, prompt-injection detection/sanitization, a SHA-256 attestation chain, and a full `AuditLog` — all opt-in and backward compatible
 - Storage-backed, multi-instance-safe queue with `maxSize` and `ttl`, or a plain in-memory queue when no storage is configured
 - Conversation context persisted across runs via `ContextProvider`
 - Bee lifecycle events (`run:start`, `run:complete`, `run:error`, `retry`, `queue:full`, `queue:expired`, ...) published through `EventPublisher`
@@ -122,7 +149,7 @@ restrict who it's allowed to delegate to at all. See
 - In-memory `restart()` to reconfigure all Bees after a plan change
 
 ## Architecture
-See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on, and [docs/DELEGATION.md](./docs/DELEGATION.md) / [docs/TRUST.md](./docs/TRUST.md) for agent-to-agent delegation.
+See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on, [docs/DELEGATION.md](./docs/DELEGATION.md) / [docs/TRUST.md](./docs/TRUST.md) for agent-to-agent delegation, and [docs/SECURITY.md](./docs/SECURITY.md) for the secure communication protocol.
 
 ```
 src/
@@ -139,12 +166,22 @@ src/
 │   └── InMemoryEventBus.ts — EventBus for dev/tests
 ├── llm/
 │   └── SimpleLLM.ts      — raw HTTP client for the Gemini API
+├── security/
+│   ├── MessageSigner.ts          — HMAC-SHA256 signing + nonce replay protection
+│   ├── MessageEncryption.ts      — hybrid RSA-OAEP + AES-256-GCM end-to-end encryption
+│   ├── PromptInjectionDetector.ts — pattern-based injection detection/sanitization
+│   ├── AttestationChain.ts       — SHA-256 hash chain over signed messages
+│   ├── AuditLog.ts               — security event trail (StorageProvider-backed, optional)
+│   ├── SecureMessage.ts          — SecureAgentMessage helpers + SecurityError
+│   └── mTLSConfig.ts             — mTLS credential loading for Redis/Kafka/etc backends
 ├── bee/
-│   ├── BeeConfig.ts        — model limits registry + auto-detection
-│   ├── Bee.ts              — individual auto-configured agent
-│   ├── BeeManager.ts       — global orchestrator + agent registry/delegation
-│   └── delegationTools.ts  — createDelegationTool() Tool factory
-├── types.ts              — Tool, Message, ToolCall, AgentRun, BeeEvent, QueueConfig, DelegationRequest
+│   ├── BeeConfig.ts            — model limits registry + auto-detection
+│   ├── Bee.ts                  — individual auto-configured agent
+│   ├── BeeManager.ts           — global orchestrator + agent registry/secure delegation
+│   ├── delegationTools.ts      — createDelegationTool() Tool factory
+│   ├── BeeSecurityContext.ts   — per-Bee whitelist/rate limit/tool policy
+│   └── BeeIdentityManager.ts   — RSA-2048 identity registry
+├── types.ts              — Tool, Message, ToolCall, AgentRun, BeeEvent, QueueConfig, DelegationRequest, SecureAgentMessage, BeeIdentity, AttestationChain, AuditEntry, SafePrompt
 └── index.ts              — public package exports
 ```
 
@@ -160,4 +197,8 @@ npm run test:ci       # CI mode (coverage thresholds enforced)
 Tests never call a real LLM API or a real Redis/Mongo — `axios` is
 mocked and every provider is exercised through `MockLLM`
 (`tests/__mocks__/MockLLM.ts`) plus the in-memory provider
-implementations, so results are fast and reproducible.
+implementations, so results are fast and reproducible. The security
+suite (`tests/security/`) is the one place that intentionally does
+real cryptography — genuine RSA-2048 keys, real AES-256-GCM
+encrypt/decrypt, real HMAC-SHA256 signatures — since that's exactly
+what needs proving, not mocking.

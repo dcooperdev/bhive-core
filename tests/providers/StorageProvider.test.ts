@@ -71,6 +71,20 @@ function describeStorageProviderContract(providerName: string, factory: () => St
 
         expect(await storage.listLength('queue')).toBe(0);
       });
+
+      it('should return an empty array for an unknown list via getList', async () => {
+        expect(await storage.getList('queue')).toEqual([]);
+      });
+
+      it('should read the full list without removing items via getList', async () => {
+        await storage.pushToList('queue', 'first');
+        await storage.pushToList('queue', 'second');
+
+        expect(await storage.getList('queue')).toEqual(['first', 'second']);
+        // Non-destructive: length and pop order are unaffected.
+        expect(await storage.listLength('queue')).toBe(2);
+        expect(await storage.popFromList('queue')).toBe('first');
+      });
     });
   });
 }

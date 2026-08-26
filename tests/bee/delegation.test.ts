@@ -2,6 +2,7 @@ jest.mock('axios');
 
 import { BeeManager } from '../../src/bee/BeeManager';
 import { createDelegationTool } from '../../src/bee/delegationTools';
+import { BeeSecurityContext } from '../../src/bee/BeeSecurityContext';
 import { MockLLM } from '../__mocks__/MockLLM';
 import { RecordingEventPublisher } from '../fixtures/providers';
 import { mockLabelTool } from '../fixtures/tools';
@@ -347,6 +348,139 @@ describe('Agent-to-agent delegation', () => {
 
       const delegations = beeManager.getDelegationHistory();
       expect(delegations.map(d => `${d.from}->${d.to}`)).toEqual(['classifier->responder', 'responder->executor']);
+    });
+  });
+
+  describe('secure delegation (v0.4)', () => {
+    it('should still work when fromBeeName does not correspond to a registered Bee (default open context, fresh identity)', async () => {
+      const beeManager = new BeeManager('gemini-1.5-flash', {
+        apiKey: 'test-api-key',
+        securityOptions: { enableSigning: true }
+      });
+      beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+
+      // "system" is not a Bee this manager created - delegateToAgent still
+      // works, falling back to a permissive context and generating a
+      // fresh identity for it on demand.
+      const result = await beeManager.delegateToAgent('system', 'responder', 'Kick off the workflow');
+
+      expect(result).toBeDefined();
+      expect(beeManager.getIdentityManager().hasIdentity('system')).toBe(true);
+    });
+
+    it('should emit delegation:security_error and record rate_limit_exceeded once the sender exceeds its rate limit', async () => {
+      const events = new RecordingEventPublisher();
+      const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key', eventPublisher: events });
+
+      beeManager.createBee({
+        name: 'classifier',
+        prompt: 'Classify',
+        tools: [],
+        llmAdapter: new MockLLM(),
+        securityContext: new BeeSecurityContext({ maxMessagesPerMinute: 1 })
+      });
+      beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+
+      await beeManager.delegateToAgent('classifier', 'responder', 'first');
+      await expect(beeManager.delegateToAgent('classifier', 'responder', 'second')).rejects.toThrow(
+        /exceeded its rate limit/
+      );
+
+      const securityErrors = events.eventsOfType('delegation:security_error');
+      expect(securityErrors.some(e => (e.data as any).reason === 'rate_limit')).toBe(true);
+
+      const entries = await beeManager.getAuditLog().getEntriesByType('rate_limit_exceeded');
+      expect(entries.length).toBeGreaterThan(0);
+    });
+
+    it('should emit delegation:security_error and record signature_failed when the pipeline itself hits a security failure', async () => {
+      const events = new RecordingEventPublisher();
+      const beeManager = new BeeManager('gemini-1.5-flash', {
+        apiKey: 'test-api-key',
+        eventPublisher: events,
+        securityOptions: { enableEncryption: true }
+      });
+
+      beeManager.createBee({ name: 'classifier', prompt: 'Classify', tools: [], llmAdapter: new MockLLM() });
+      beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+
+      // Corrupt responder's identity so its public/private keys no longer
+      // match - decryption fails even though everything else is normal.
+      const identityManager = beeManager.getIdentityManager();
+      const responderIdentity = identityManager.getBeeIdentity('responder')!;
+      const otherIdentity = identityManager.registerBeeIdentity('unrelated-bee');
+      identityManager.loadIdentity({ ...responderIdentity, privateKey: otherIdentity.privateKey });
+
+      await expect(beeManager.delegateToAgent('classifier', 'responder', 'Draft a reply')).rejects.toThrow(
+        /Decryption failed/
+      );
+
+      expect(events.eventsOfType('delegation:security_error')).toHaveLength(1);
+      const failures = await beeManager.getAuditLog().getEntriesByType('signature_failed');
+      expect(failures.length).toBeGreaterThan(0);
+    });
+
+    describe('verifyIncomingMessage', () => {
+      it('should throw when the recipient has no registered identity', () => {
+        const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
+        const message = {
+          id: '1',
+          from: 'a',
+          to: 'unregistered',
+          timestamp: Date.now(),
+          data: 'ciphertext',
+          encrypted: true,
+          iv: 'x',
+          authTag: 'y',
+          encryptedKey: 'z'
+        };
+
+        expect(() => beeManager.verifyIncomingMessage(message, 'a', 'unregistered')).toThrow(
+          /No identity registered for recipient/
+        );
+      });
+
+      it('should throw when the sender has no registered identity', () => {
+        const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
+        beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+
+        const message = {
+          id: '1',
+          from: 'unregistered-sender',
+          to: 'responder',
+          timestamp: Date.now(),
+          data: 'plain data',
+          signature: 'abc',
+          nonce: 'xyz'
+        };
+
+        expect(() => beeManager.verifyIncomingMessage(message, 'unregistered-sender', 'responder')).toThrow(
+          /No identity registered for sender/
+        );
+      });
+
+      it('should throw when the signature does not verify', () => {
+        const beeManager = new BeeManager('gemini-1.5-flash', {
+          apiKey: 'test-api-key',
+          securityOptions: { enableSigning: true }
+        });
+        beeManager.createBee({ name: 'classifier', prompt: 'Classify', tools: [], llmAdapter: new MockLLM() });
+        beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+
+        const message = {
+          id: '1',
+          from: 'classifier',
+          to: 'responder',
+          timestamp: Date.now(),
+          data: 'task',
+          signature: '00'.repeat(32),
+          nonce: 'a-fresh-nonce'
+        };
+
+        expect(() => beeManager.verifyIncomingMessage(message, 'classifier', 'responder')).toThrow(
+          /Message verification failed/
+        );
+      });
     });
   });
 });

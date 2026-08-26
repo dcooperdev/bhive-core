@@ -20,4 +20,6 @@ export interface StorageProvider {
   popFromList<T = unknown>(key: string): Promise<T | undefined>;
   listLength(key: string): Promise<number>;
   clearList(key: string): Promise<void>;
+  /** Returns every item currently in the list, oldest first, without removing them. */
+  getList<T = unknown>(key: string): Promise<T[]>;
 }

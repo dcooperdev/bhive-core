@@ -64,4 +64,8 @@ export class InMemoryStorage implements StorageProvider {
   async clearList(key: string): Promise<void> {
     this.lists.delete(key);
   }
+
+  async getList<T = unknown>(key: string): Promise<T[]> {
+    return [...(this.lists.get(key) ?? [])] as T[];
+  }
 }
