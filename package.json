@@ -1,5 +1,5 @@
 {
-  "name": "@bhive/core",
+  "name": "@bhive-ai/core",
   "version": "0.4.0",
   "description": "Hive - Multi-Agent AI Framework with a Provider Pattern architecture and a secure agent-to-agent communication protocol (signing, encryption, prompt-injection defense, attestation, audit logging)",
   "main": "dist/index.js",
