@@ -1,8 +1,12 @@
 # 🐝 Hive - Multi-Agent AI Framework
 
-`@hiveai/core`: a multi-agent AI framework where each Bee auto-configures
-its rate limits, delays, and timeouts from the model it's given — no
-manual tuning required.
+`@hiveai/core`: a multi-agent AI framework built around a **Provider
+Pattern**. `Bee`/`BeeManager` never depend on a concrete LLM, storage,
+context, or event-bus backend — only on small interfaces. You plug in
+whichever implementation fits your stack (Gemini or your own LLM
+adapter, Redis/Mongo/Postgres or your own storage, Kafka/WebSocket or
+your own event bus). Nothing in the framework changes when you swap one
+out.
 
 ## Quick Start
 
@@ -24,6 +28,8 @@ npm test
 ```typescript
 import { BeeManager } from '@hiveai/core';
 
+// No providers given: BeeManager falls back to a GeminiAdapter and a
+// plain in-memory queue, no configuration required.
 const beeManager = new BeeManager('gemini-1.5-flash');
 
 beeManager.createBee({
@@ -38,26 +44,64 @@ await beeManager.executeTask('Process email: ...', ['classifier']);
 beeManager.restart('gemini-1.5-pro');
 ```
 
+### Injecting providers
+
+```typescript
+import { BeeManager, InMemoryStorage, InMemoryEventBus } from '@hiveai/core';
+
+const beeManager = new BeeManager('gemini-1.5-flash', {
+  apiKey: process.env.GOOGLE_API_KEY,
+  storageProvider: new InMemoryStorage(),   // swap for a RedisStorage, MongoStorage, ...
+  eventPublisher: new InMemoryEventBus()    // swap for a KafkaEventBus, WebSocketEventBus, ...
+});
+
+beeManager.createBee({
+  name: 'classifier',
+  prompt: 'Classify emails as WORK/SPAM/NORMAL',
+  tools: [classifyTool],
+  // Persistent, bounded, self-expiring queue backed by the storageProvider above.
+  queueConfig: { persist: true, maxSize: 1000, ttl: 60_000 }
+});
+```
+
+Every provider can also be overridden per-Bee (`createBee({ llmAdapter, storageProvider, contextProvider, eventPublisher, ... })`) when one Bee needs a different backend than the rest of the Hive.
+
+See [docs/PROVIDERS.md](./docs/PROVIDERS.md) for how to write a custom adapter, and [docs/EXAMPLES.md](./docs/EXAMPLES.md) for a full Email Manager Hive built on providers.
+
 ## Features
 - Auto-detected rate limits, delays, and timeouts per model (`BeeConfig`)
-- Per-Bee request queueing so calls never overlap
-- Exponential backoff retry on 503 errors
-- Timeout handling per model
+- **Provider Pattern**: `LLMAdapter`, `StorageProvider`, `ContextProvider`, `EventPublisher`/`EventSubscriber` — Hive depends only on these interfaces, never on a concrete backend
+- Storage-backed, multi-instance-safe queue with `maxSize` and `ttl`, or a plain in-memory queue when no storage is configured
+- Conversation context persisted across runs via `ContextProvider`
+- Bee lifecycle events (`run:start`, `run:complete`, `run:error`, `retry`, `queue:full`, `queue:expired`, ...) published through `EventPublisher`
+- Exponential backoff retry on 503 errors, timeout handling per model
 - Token/cost tracking and a `printSummary()` / `getBeeStats()` report
 - In-memory `restart()` to reconfigure all Bees after a plan change
 
 ## Architecture
-See [HIVE_SPEC.md](./HIVE_SPEC.md) for the full design and [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy.
+See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, and [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on.
 
 ```
 src/
+├── providers/           — provider interfaces (the only things Bee/BeeManager depend on)
+│   ├── LLMAdapter.ts
+│   ├── StorageProvider.ts
+│   ├── ContextProvider.ts
+│   └── EventBus.ts       — EventPublisher + EventSubscriber
+├── adapters/
+│   └── GeminiAdapter.ts  — LLMAdapter wrapping SimpleLLM
+├── storage/
+│   └── InMemoryStorage.ts — StorageProvider for dev/tests
+├── events/
+│   └── InMemoryEventBus.ts — EventBus for dev/tests
+├── llm/
+│   └── SimpleLLM.ts      — raw HTTP client for the Gemini API
 ├── bee/
-│   ├── BeeConfig.ts   — model limits registry + auto-detection
-│   ├── Bee.ts         — individual auto-configured agent
-│   └── BeeManager.ts  — global orchestrator
-├── types.ts           — Tool, Message, ToolCall, AgentRun
-├── llm.ts             — SimpleLLM wrapper around the Gemini API
-└── index.ts           — public package exports
+│   ├── BeeConfig.ts      — model limits registry + auto-detection
+│   ├── Bee.ts            — individual auto-configured agent
+│   └── BeeManager.ts     — global orchestrator
+├── types.ts              — Tool, Message, ToolCall, AgentRun, BeeEvent, QueueConfig
+└── index.ts              — public package exports
 ```
 
 ## Testing
@@ -69,5 +113,7 @@ npm run test:coverage # coverage report
 npm run test:ci       # CI mode (coverage thresholds enforced)
 ```
 
-Tests never call the real Gemini API — `axios` and `SimpleLLM` are mocked
-(`tests/__mocks__/MockLLM.ts`) so results are fast and reproducible.
+Tests never call a real LLM API or a real Redis/Mongo — `axios` is
+mocked and every provider is exercised through `MockLLM`
+(`tests/__mocks__/MockLLM.ts`) plus the in-memory provider
+implementations, so results are fast and reproducible.

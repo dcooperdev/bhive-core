@@ -2,6 +2,8 @@ import { Bee } from '../../src/bee/Bee';
 import { BeeConfig } from '../../src/bee/BeeConfig';
 import { MockLLM } from '../__mocks__/MockLLM';
 import { mockClassifyTool } from '../fixtures/tools';
+import { RecordingEventPublisher, TestContextProvider } from '../fixtures/providers';
+import { InMemoryStorage } from '../../src/storage/InMemoryStorage';
 import { Tool } from '../../src/types';
 
 describe('Bee', () => {
@@ -20,7 +22,7 @@ describe('Bee', () => {
         'classifier',
         'You classify emails',
         [mockClassifyTool],
-        mockLLM as any,
+        mockLLM,
         beeConfig,
         'gemini-1.5-flash'
       );
@@ -36,7 +38,7 @@ describe('Bee', () => {
         'analyzer',
         'You analyze data',
         [],
-        mockLLM as any,
+        mockLLM,
         beeConfig,
         'unknown-model'
       );
@@ -53,7 +55,7 @@ describe('Bee', () => {
         'test-bee',
         'You respond to input',
         [],
-        mockLLM as any,
+        mockLLM,
         beeConfig,
         'gemini-1.5-flash'
       );
@@ -94,7 +96,7 @@ describe('Bee', () => {
         'test-bee',
         'Test',
         [],
-        mockLLM as any,
+        mockLLM,
         beeConfig,
         'gemini-1.5-flash'
       );
@@ -119,7 +121,7 @@ describe('Bee', () => {
         'test-bee',
         'Test',
         [],
-        mockLLM as any,
+        mockLLM,
         beeConfig,
         'gemini-1.5-flash'
       );
@@ -145,7 +147,7 @@ describe('Bee', () => {
         recommendedDelayMs: 5
       });
 
-      bee = new Bee('retry-bee', 'Test', [], mockLLM as any, beeConfig, 'gemini-1.5-flash');
+      bee = new Bee('retry-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash');
 
       const error = Object.assign(new Error('Service Unavailable'), {
         response: { status: 503 }
@@ -165,7 +167,7 @@ describe('Bee', () => {
         timeout: 50
       });
 
-      bee = new Bee('timeout-bee', 'Test', [], mockLLM as any, beeConfig, 'gemini-1.5-flash');
+      bee = new Bee('timeout-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash');
       mockLLM.hangNextCall();
 
       const result = await bee.run('Test input');
@@ -179,7 +181,7 @@ describe('Bee', () => {
         recommendedDelayMs: 5
       });
 
-      bee = new Bee('failing-bee', 'Test', [], mockLLM as any, beeConfig, 'gemini-1.5-flash');
+      bee = new Bee('failing-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash');
       mockLLM.failNext(new Error('boom'));
 
       const result = await bee.run('Test input');
@@ -202,7 +204,7 @@ describe('Bee', () => {
         'tool-bee',
         'Use your tools',
         [mockClassifyTool, failingTool],
-        mockLLM as any,
+        mockLLM,
         beeConfig,
         'gemini-1.5-flash'
       );
@@ -225,6 +227,155 @@ describe('Bee', () => {
       const run = bee.getRuns()[0];
       expect(run.toolCalls).toHaveLength(1);
       expect(run.toolCalls[0].toolName).toBe('classify_email');
+    });
+  });
+
+  describe('providers', () => {
+    beforeEach(() => {
+      beeConfig.updateModelLimits('gemini-1.5-flash', {
+        ...beeConfig.getModelLimits('gemini-1.5-flash'),
+        recommendedDelayMs: 5
+      });
+    });
+
+    describe('eventPublisher', () => {
+      it('should emit lifecycle events for a successful run', async () => {
+        const events = new RecordingEventPublisher();
+        bee = new Bee('event-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          eventPublisher: events
+        });
+
+        await bee.run('Test input');
+
+        expect(events.eventsOfType('run:enqueued')).toHaveLength(1);
+        expect(events.eventsOfType('run:start')).toHaveLength(1);
+        expect(events.eventsOfType('run:complete')).toHaveLength(1);
+        expect(events.events.every(e => e.beeName === 'event-bee')).toBe(true);
+      });
+
+      it('should emit a run:error event when the run fails', async () => {
+        const events = new RecordingEventPublisher();
+        bee = new Bee('event-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          eventPublisher: events
+        });
+        mockLLM.failNext(new Error('boom'));
+
+        await bee.run('Test input');
+
+        expect(events.eventsOfType('run:error')).toHaveLength(1);
+      });
+
+      it('should emit a retry event on a 503 backoff', async () => {
+        const events = new RecordingEventPublisher();
+        bee = new Bee('event-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          eventPublisher: events
+        });
+        mockLLM.failNext(Object.assign(new Error('unavailable'), { response: { status: 503 } }));
+
+        await bee.run('Test input');
+
+        expect(events.eventsOfType('retry')).toHaveLength(1);
+      });
+
+      it('should log and continue when the event publisher itself throws', async () => {
+        const events = { name: 'broken', publish: async () => { throw new Error('publish failed'); } };
+        bee = new Bee('event-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          eventPublisher: events
+        });
+
+        const result = await bee.run('Test input');
+
+        expect(result).toBeDefined();
+      });
+    });
+
+    describe('contextProvider', () => {
+      it('should carry prior messages into the next run', async () => {
+        const context = new TestContextProvider();
+        bee = new Bee('context-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          contextProvider: context
+        });
+
+        await bee.run('First message');
+        const saved = await context.getContext<{ role: string; content: string }[]>('bee:context-bee:context');
+        expect(saved?.length).toBeGreaterThan(0);
+
+        await bee.run('Second message');
+        const savedAfterSecond = await context.getContext<{ role: string; content: string }[]>(
+          'bee:context-bee:context'
+        );
+
+        // The saved context grows to include both exchanges.
+        expect(savedAfterSecond!.length).toBeGreaterThan(saved!.length);
+      });
+    });
+
+    describe('storageProvider-backed queue', () => {
+      it('should track queue length via the storage provider when persist is enabled', async () => {
+        const storage = new InMemoryStorage();
+        bee = new Bee('queue-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          storageProvider: storage,
+          queueConfig: { persist: true, persistenceKey: 'shared:queue' }
+        });
+
+        await bee.run('Task 1');
+
+        expect(await storage.listLength('shared:queue')).toBe(0); // popped once processed
+        expect(await bee.getQueueLength()).toBe(0);
+      });
+
+      it('should reject new work once maxSize is reached', async () => {
+        bee = new Bee('bounded-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          queueConfig: { maxSize: 0 }
+        });
+
+        await expect(bee.run('Task 1')).rejects.toThrow(/Queue full/);
+      });
+
+      it('should expire an item that waited past its TTL', async () => {
+        beeConfig.updateModelLimits('gemini-1.5-flash', {
+          ...beeConfig.getModelLimits('gemini-1.5-flash'),
+          recommendedDelayMs: 0
+        });
+
+        const events = new RecordingEventPublisher();
+        bee = new Bee('ttl-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          eventPublisher: events,
+          queueConfig: { ttl: 20 }
+        });
+
+        mockLLM.delayNext(100); // keeps the first run busy long enough for the second to expire
+
+        const first = bee.run('Task 1');
+        const second = bee.run('Task 2');
+
+        const [firstResult, secondResult] = await Promise.all([first, second]);
+
+        expect(firstResult).not.toMatch(/expired/);
+        expect(secondResult).toMatch(/expired in queue/);
+        expect(events.eventsOfType('queue:expired')).toHaveLength(1);
+      });
+
+      it('should derive a default persistence key from the bee name when none is given', async () => {
+        const storage = new InMemoryStorage();
+        bee = new Bee('default-key-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          storageProvider: storage,
+          queueConfig: { persist: true }
+        });
+
+        await bee.run('Task 1');
+
+        expect(await storage.listLength('bee:default-key-bee:queue')).toBe(0);
+      });
+
+      it('should fall back to in-memory when persist is requested without a storageProvider', async () => {
+        bee = new Bee('fallback-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash', {
+          queueConfig: { persist: true }
+        });
+
+        const result = await bee.run('Task 1');
+        expect(result).toBeDefined();
+      });
     });
   });
 });

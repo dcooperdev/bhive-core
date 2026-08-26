@@ -1,18 +1,8 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { Message, Tool } from '../types';
 
 dotenv.config();
-
-export interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-export interface Tool {
-  name: string;
-  description: string;
-  execute: (params: any) => Promise<string>;
-}
 
 export class SimpleLLM {
   private apiKey: string;

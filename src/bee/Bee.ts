@@ -1,25 +1,53 @@
-import { SimpleLLM } from '../llm';
-import { Message, Tool, ToolCall, AgentRun } from '../types';
+import { randomUUID } from 'crypto';
+import { Message, Tool, ToolCall, AgentRun, BeeEvent, BeeEventType, QueueConfig } from '../types';
+import { LLMAdapter } from '../providers/LLMAdapter';
+import { StorageProvider } from '../providers/StorageProvider';
+import { ContextProvider } from '../providers/ContextProvider';
+import { EventPublisher } from '../providers/EventBus';
 import { BeeConfig, ModelLimits } from './BeeConfig';
+
+export interface BeeProviderOptions {
+  maxIterations?: number;
+  storageProvider?: StorageProvider;
+  eventPublisher?: EventPublisher;
+  contextProvider?: ContextProvider;
+  queueConfig?: QueueConfig;
+}
+
+interface QueueItem {
+  id: string;
+  input: string;
+  enqueuedAt: number;
+}
+
+const MAX_CONTEXT_MESSAGES = 20;
 
 /**
  * Bee - Intelligent Individual Agent
  *
  * Auto-configures its rate limit, delay, timeout and max tokens from
- * BeeConfig on construction. Callers never set these manually.
+ * BeeConfig on construction. Depends only on the LLMAdapter/
+ * StorageProvider/ContextProvider/EventPublisher interfaces, never on a
+ * concrete backend - callers plug in whichever implementation they want.
  */
 export class Bee {
   private name: string;
   private prompt: string;
   private tools: Tool[];
-  private llm: SimpleLLM;
+  private llm: LLMAdapter;
   private beeConfig: BeeConfig;
   private modelName: string;
   private maxIterations: number;
 
+  private storageProvider?: StorageProvider;
+  private eventPublisher?: EventPublisher;
+  private contextProvider?: ContextProvider;
+  private queueConfig: QueueConfig;
+
   private config: ModelLimits;
   private lastRequestTime = 0;
   private requestQueue: Promise<void> = Promise.resolve();
+  private localQueue: QueueItem[] = [];
 
   public runs: AgentRun[] = [];
 
@@ -27,10 +55,10 @@ export class Bee {
     name: string,
     prompt: string,
     tools: Tool[],
-    llm: SimpleLLM,
+    llm: LLMAdapter,
     beeConfig: BeeConfig,
     modelName: string,
-    maxIterations: number = 3
+    options: BeeProviderOptions = {}
   ) {
     this.name = name;
     this.prompt = prompt;
@@ -38,7 +66,17 @@ export class Bee {
     this.llm = llm;
     this.beeConfig = beeConfig;
     this.modelName = modelName;
-    this.maxIterations = maxIterations;
+    this.maxIterations = options.maxIterations ?? 3;
+    this.storageProvider = options.storageProvider;
+    this.eventPublisher = options.eventPublisher;
+    this.contextProvider = options.contextProvider;
+    this.queueConfig = options.queueConfig ?? {};
+
+    if (this.queueConfig.persist && !this.storageProvider) {
+      console.log(
+        `   ⚠️  Bee "${name}" requested a persistent queue but no storageProvider was given; falling back to in-memory.`
+      );
+    }
 
     this.config = this.beeConfig.getModelLimits(this.modelName);
 
@@ -86,31 +124,82 @@ export class Bee {
     };
   }
 
+  /** Number of items currently waiting in the queue (persisted or local). */
+  async getQueueLength(): Promise<number> {
+    return this.currentQueueLength();
+  }
+
   /**
-   * Executes a task, queued behind any in-flight run on this Bee so
-   * requests are processed sequentially and never overlap.
+   * Enqueues a task behind any pending work on this Bee, then processes
+   * it once its turn comes, respecting rate limiting. The queue is
+   * storage-backed (shared, multi-instance-safe capacity accounting)
+   * when `queueConfig.persist` and a storageProvider are both set,
+   * otherwise it's a plain in-memory array.
    */
   async run(input: string): Promise<string> {
-    const task = this.requestQueue.then(() => this.executeWithRateLimit(input));
-    // executeWithRateLimit never rejects (it catches its own errors), so
-    // the queue only ever needs to wait on it, never swallow a rejection.
+    const item: QueueItem = { id: randomUUID(), input, enqueuedAt: Date.now() };
+
+    const queueLength = await this.currentQueueLength();
+    if (this.queueConfig.maxSize !== undefined && queueLength >= this.queueConfig.maxSize) {
+      await this.emitEvent('queue:full', { queueLength, maxSize: this.queueConfig.maxSize });
+      throw new Error(`Queue full: "${this.name}" has reached its max size of ${this.queueConfig.maxSize}`);
+    }
+
+    await this.enqueueItem(item);
+    await this.emitEvent('run:enqueued', { id: item.id, input });
+
+    const task = this.requestQueue.then(() => this.dequeueAndProcess(item));
+    // dequeueAndProcess never rejects (it catches its own errors), so the
+    // queue only ever needs to wait on it, never swallow a rejection.
     this.requestQueue = task.then(() => undefined);
     return task;
   }
 
+  private async dequeueAndProcess(item: QueueItem): Promise<string> {
+    // Pop the front of the shared/local queue for bookkeeping. Under
+    // concurrent multi-instance access against the same storage key this
+    // is best-effort visibility, not a distributed lock: the promise this
+    // call resolves with always corresponds to `item`, the input this
+    // very run() call received.
+    await this.dequeueItem();
+
+    const waitedMs = Date.now() - item.enqueuedAt;
+    if (this.queueConfig.ttl !== undefined && waitedMs > this.queueConfig.ttl) {
+      await this.emitEvent('queue:expired', { id: item.id, waitedMs });
+
+      const output = `Error: Task expired in queue after ${this.queueConfig.ttl}ms`;
+      this.runs.push({
+        agent: this.name,
+        input: item.input,
+        toolCalls: [],
+        output,
+        tokensUsed: 0,
+        timestamp: new Date()
+      });
+
+      return output;
+    }
+
+    return this.executeWithRateLimit(item.input);
+  }
+
   private async executeWithRateLimit(input: string): Promise<string> {
     await this.applyDelay();
+    await this.emitEvent('run:start', { input });
 
     console.log(`\n[${this.name}] Running...`);
     console.log(`   Input: ${input}`);
 
+    const history = await this.loadContext();
     const messages: Message[] = [
+      ...history,
       { role: 'user', content: `${this.prompt}\n\nTask: ${input}` }
     ];
 
     const toolCalls: ToolCall[] = [];
     let output = '';
     let iterations = 0;
+    let failed = false;
 
     while (iterations < this.maxIterations) {
       iterations++;
@@ -154,9 +243,12 @@ export class Bee {
       } catch (error) {
         console.error(`   ❌ Bee error: ${(error as Error).message}`);
         output = `Error: ${(error as Error).message}`;
+        failed = true;
         break;
       }
     }
+
+    await this.saveContext(messages);
 
     const run: AgentRun = {
       agent: this.name,
@@ -168,6 +260,8 @@ export class Bee {
     };
 
     this.runs.push(run);
+
+    await this.emitEvent(failed ? 'run:error' : 'run:complete', { input, output });
 
     return output;
   }
@@ -206,6 +300,7 @@ export class Bee {
       if (status === 503) {
         const nextDelay = delayMs * 2;
         console.log(`   ⏳ 503 received, backing off ${nextDelay}ms and retrying...`);
+        await this.emitEvent('retry', { reason: '503', nextDelayMs: nextDelay });
         await sleep(nextDelay);
         return this.callWithRetry(messages, nextDelay);
       }
@@ -215,6 +310,76 @@ export class Bee {
       }
 
       throw error;
+    }
+  }
+
+  // --- Queue (storage-backed or in-memory) -------------------------------
+
+  private get queueKey(): string {
+    return this.queueConfig.persistenceKey || `bee:${this.name}:queue`;
+  }
+
+  private get usesPersistentQueue(): boolean {
+    return Boolean(this.queueConfig.persist && this.storageProvider);
+  }
+
+  private async currentQueueLength(): Promise<number> {
+    if (this.usesPersistentQueue) {
+      return this.storageProvider!.listLength(this.queueKey);
+    }
+    return this.localQueue.length;
+  }
+
+  private async enqueueItem(item: QueueItem): Promise<void> {
+    if (this.usesPersistentQueue) {
+      await this.storageProvider!.pushToList(this.queueKey, item);
+    } else {
+      this.localQueue.push(item);
+    }
+  }
+
+  private async dequeueItem(): Promise<void> {
+    if (this.usesPersistentQueue) {
+      await this.storageProvider!.popFromList(this.queueKey);
+    } else {
+      this.localQueue.shift();
+    }
+  }
+
+  // --- Context (conversation memory across runs) --------------------------
+
+  private get contextKey(): string {
+    return `bee:${this.name}:context`;
+  }
+
+  private async loadContext(): Promise<Message[]> {
+    if (!this.contextProvider) return [];
+    const saved = await this.contextProvider.getContext<Message[]>(this.contextKey);
+    return saved ?? [];
+  }
+
+  private async saveContext(messages: Message[]): Promise<void> {
+    if (!this.contextProvider) return;
+    await this.contextProvider.setContext(this.contextKey, messages.slice(-MAX_CONTEXT_MESSAGES));
+  }
+
+  // --- Events --------------------------------------------------------------
+
+  private async emitEvent(type: BeeEventType, data: Record<string, unknown>): Promise<void> {
+    if (!this.eventPublisher) return;
+
+    const event: BeeEvent = {
+      id: randomUUID(),
+      timestamp: new Date(),
+      beeName: this.name,
+      type,
+      data
+    };
+
+    try {
+      await this.eventPublisher.publish(event);
+    } catch (error) {
+      console.error(`   ⚠️  Failed to publish event "${type}": ${(error as Error).message}`);
     }
   }
 }

@@ -3,6 +3,9 @@ jest.mock('axios');
 import axios from 'axios';
 import { BeeManager, BeeDefinition } from '../../src/bee/BeeManager';
 import { mockClassifyTool } from '../fixtures/tools';
+import { MockLLM } from '../__mocks__/MockLLM';
+import { InMemoryStorage } from '../../src/storage/InMemoryStorage';
+import { RecordingEventPublisher } from '../fixtures/providers';
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
@@ -17,12 +20,17 @@ describe('BeeManager', () => {
       }
     });
 
-    beeManager = new BeeManager('gemini-1.5-flash', 'test-api-key');
+    beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
   });
 
   describe('constructor', () => {
     it('should initialize with model', () => {
       expect(beeManager).toBeDefined();
+    });
+
+    it('should default to a GeminiAdapter when no options are given at all', () => {
+      const manager = new BeeManager('gemini-1.5-flash');
+      expect(manager.getLLM().name).toBe('gemini');
     });
   });
 
@@ -194,6 +202,56 @@ describe('BeeManager', () => {
     it('should return the underlying LLM instance', () => {
       expect(beeManager.getLLM()).toBeDefined();
       expect(beeManager.getLLM().getTokens()).toBe(0);
+    });
+  });
+
+  describe('providers', () => {
+    it('should use an injected llmAdapter instead of the default GeminiAdapter', () => {
+      const mockLLM = new MockLLM();
+      const manager = new BeeManager('gemini-1.5-flash', { llmAdapter: mockLLM });
+
+      expect(manager.getLLM()).toBe(mockLLM);
+      expect(manager.getLLM().name).toBe('mock');
+    });
+
+    it('should pass manager-level providers down to every created bee', async () => {
+      const mockLLM = new MockLLM();
+      const storage = new InMemoryStorage();
+      const events = new RecordingEventPublisher();
+
+      const manager = new BeeManager('gemini-1.5-flash', {
+        llmAdapter: mockLLM,
+        storageProvider: storage,
+        eventPublisher: events
+      });
+
+      manager.createBee({
+        name: 'classifier',
+        prompt: 'Classify',
+        tools: [],
+        queueConfig: { persist: true, persistenceKey: 'shared:classifier-queue' }
+      });
+
+      await manager.executeTask('Test', ['classifier']);
+
+      expect(events.eventsOfType('run:complete')).toHaveLength(1);
+      expect(await storage.listLength('shared:classifier-queue')).toBe(0);
+    });
+
+    it('should let a per-bee provider override the manager-level default', () => {
+      const managerLLM = new MockLLM();
+      const beeLLM = new MockLLM();
+      const manager = new BeeManager('gemini-1.5-flash', { llmAdapter: managerLLM });
+
+      manager.createBee({
+        name: 'classifier',
+        prompt: 'Classify',
+        tools: [],
+        llmAdapter: beeLLM
+      });
+
+      // The manager's own default LLM is unaffected by the per-bee override.
+      expect(manager.getLLM()).toBe(managerLLM);
     });
   });
 });

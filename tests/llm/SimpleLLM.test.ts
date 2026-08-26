@@ -1,7 +1,7 @@
 jest.mock('axios');
 
 import axios from 'axios';
-import { SimpleLLM } from '../../src/llm';
+import { SimpleLLM } from '../../src/llm/SimpleLLM';
 
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 

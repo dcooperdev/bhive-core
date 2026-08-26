@@ -2,6 +2,8 @@ jest.mock('axios');
 
 import axios from 'axios';
 import { BeeManager } from '../src/bee/BeeManager';
+import { InMemoryStorage } from '../src/storage/InMemoryStorage';
+import { InMemoryEventBus } from '../src/events/InMemoryEventBus';
 import { testEmails } from './fixtures/emails';
 import { mockClassifyTool, mockLabelTool } from './fixtures/tools';
 
@@ -18,7 +20,7 @@ describe('Integration: BeeManager + Bee workflow', () => {
       }
     });
 
-    beeManager = new BeeManager('gemini-1.5-flash', 'test-api-key');
+    beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
   });
 
   it('should execute full email manager workflow', async () => {
@@ -112,5 +114,86 @@ describe('Integration: BeeManager + Bee workflow', () => {
     }
 
     expect(beeManager.getBee('classifier')?.getRuns()).toHaveLength(3);
+  });
+});
+
+describe('Integration: multi-instance with shared providers', () => {
+  beforeEach(() => {
+    mockedAxios.post.mockResolvedValue({
+      data: {
+        candidates: [{ content: { parts: [{ text: 'Mocked LLM response' }] } }],
+        usageMetadata: { totalTokenCount: 12 }
+      }
+    });
+  });
+
+  it('should let two separate BeeManager instances share a storage-backed queue', async () => {
+    const sharedStorage = new InMemoryStorage();
+    const queueConfig = { persist: true, persistenceKey: 'shared:worker-queue' };
+
+    const instanceA = new BeeManager('gemini-1.5-flash', {
+      apiKey: 'test-api-key',
+      storageProvider: sharedStorage
+    });
+    const instanceB = new BeeManager('gemini-1.5-flash', {
+      apiKey: 'test-api-key',
+      storageProvider: sharedStorage
+    });
+
+    instanceA.createBee({ name: 'worker', prompt: 'Work', tools: [], queueConfig });
+    instanceB.createBee({ name: 'worker', prompt: 'Work', tools: [], queueConfig });
+
+    await instanceA.getBee('worker')!.run('Task from instance A');
+    await instanceB.getBee('worker')!.run('Task from instance B');
+
+    // Both instances processed their own work against the same shared key,
+    // and the queue is fully drained once both are done.
+    expect(await sharedStorage.listLength('shared:worker-queue')).toBe(0);
+  });
+
+  it('should let two separate BeeManager instances observe each other through a shared event bus', async () => {
+    const sharedEvents = new InMemoryEventBus();
+    const seen: string[] = [];
+    sharedEvents.subscribe('*', event => {
+      seen.push(`${event.beeName}:${event.type}`);
+    });
+
+    const instanceA = new BeeManager('gemini-1.5-flash', {
+      apiKey: 'test-api-key',
+      eventPublisher: sharedEvents
+    });
+    const instanceB = new BeeManager('gemini-1.5-flash', {
+      apiKey: 'test-api-key',
+      eventPublisher: sharedEvents
+    });
+
+    instanceA.createBee({ name: 'worker-a', prompt: 'Work', tools: [] });
+    instanceB.createBee({ name: 'worker-b', prompt: 'Work', tools: [] });
+
+    await instanceA.getBee('worker-a')!.run('Task from A');
+    await instanceB.getBee('worker-b')!.run('Task from B');
+
+    expect(seen).toContain('worker-a:run:complete');
+    expect(seen).toContain('worker-b:run:complete');
+  });
+
+  it('should reject work on one instance once a shared queue is already at capacity from another', async () => {
+    const sharedStorage = new InMemoryStorage();
+    const queueConfig = { persist: true, persistenceKey: 'shared:full-queue', maxSize: 1 };
+
+    // Simulate a backlog another instance already left in the shared queue.
+    await sharedStorage.pushToList('shared:full-queue', {
+      id: 'pending-from-instance-a',
+      input: 'still queued',
+      enqueuedAt: Date.now()
+    });
+
+    const instanceB = new BeeManager('gemini-1.5-flash', {
+      apiKey: 'test-api-key',
+      storageProvider: sharedStorage
+    });
+    instanceB.createBee({ name: 'worker', prompt: 'Work', tools: [], queueConfig });
+
+    await expect(instanceB.getBee('worker')!.run('New task')).rejects.toThrow(/Queue full/);
   });
 });

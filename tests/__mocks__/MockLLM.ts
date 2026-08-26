@@ -1,10 +1,15 @@
-import { SimpleLLM, Message, Tool } from '../../src/llm';
+import { SimpleLLM } from '../../src/llm/SimpleLLM';
+import { Message, Tool } from '../../src/types';
+import { LLMAdapter } from '../../src/providers/LLMAdapter';
 
-export class MockLLM extends SimpleLLM {
+export class MockLLM extends SimpleLLM implements LLMAdapter {
+  readonly name = 'mock';
+
   private responseOverrides: Map<string, string> = new Map();
   private failNextWith: (Error & { response?: { status: number } }) | null = null;
   private hangNext = false;
   private queuedResponse: { content: string; toolCalls?: any[] } | null = null;
+  private nextDelayMs = 0;
 
   constructor() {
     // Pass a dummy key/model directly so no GOOGLE_API_KEY env lookup happens.
@@ -16,6 +21,12 @@ export class MockLLM extends SimpleLLM {
     tools?: Tool[]
   ): Promise<{ content: string; toolCalls?: any[] }> {
     (this as any).callCount++;
+
+    if (this.nextDelayMs > 0) {
+      const delay = this.nextDelayMs;
+      this.nextDelayMs = 0;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
 
     if (this.hangNext) {
       // Never resolves - used to exercise Bee's timeout handling.
@@ -83,6 +94,11 @@ export class MockLLM extends SimpleLLM {
   /** Makes the next complete() call never resolve, to exercise timeouts. */
   hangNextCall(): void {
     this.hangNext = true;
+  }
+
+  /** Makes the next complete() call take `ms` before resolving. */
+  delayNext(ms: number): void {
+    this.nextDelayMs = ms;
   }
 
   getTokens(): number {

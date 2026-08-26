@@ -1,7 +1,7 @@
 {
   "name": "@hiveai/core",
-  "version": "0.1.0",
-  "description": "Hive - Multi-Agent AI Framework with Auto-Configurable Bees",
+  "version": "0.3.0",
+  "description": "Hive - Multi-Agent AI Framework with a Provider Pattern architecture (LLM/Storage/Context/EventBus adapters)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -11,7 +11,7 @@
     "test:coverage": "jest --coverage",
     "test:ci": "jest --ci --coverage"
   },
-  "keywords": ["ai", "agents", "hive", "bees"],
+  "keywords": ["ai", "agents", "hive", "bees", "provider-pattern", "adapters"],
   "author": "Your Name",
   "license": "Apache-2.0",
   "dependencies": {

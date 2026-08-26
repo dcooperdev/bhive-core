@@ -23,3 +23,31 @@ export interface AgentRun {
   tokensUsed: number;
   timestamp: Date;
 }
+
+export type BeeEventType =
+  | 'run:enqueued'
+  | 'run:start'
+  | 'run:complete'
+  | 'run:error'
+  | 'queue:full'
+  | 'queue:expired'
+  | 'retry';
+
+export interface BeeEvent {
+  id: string;
+  timestamp: Date;
+  beeName: string;
+  type: BeeEventType;
+  data: Record<string, unknown>;
+}
+
+export interface QueueConfig {
+  /** Use a StorageProvider-backed list instead of an in-memory array. */
+  persist?: boolean;
+  /** Storage key for the persisted queue. Defaults to `bee:{name}:queue`. */
+  persistenceKey?: string;
+  /** Reject new work once the queue reaches this many pending items. */
+  maxSize?: number;
+  /** Drop items that have waited longer than this many ms before they run. */
+  ttl?: number;
+}

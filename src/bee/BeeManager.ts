@@ -1,7 +1,20 @@
-import { SimpleLLM } from '../llm';
-import { Tool } from '../types';
+import { Tool, QueueConfig } from '../types';
+import { LLMAdapter } from '../providers/LLMAdapter';
+import { StorageProvider } from '../providers/StorageProvider';
+import { ContextProvider } from '../providers/ContextProvider';
+import { EventPublisher } from '../providers/EventBus';
+import { GeminiAdapter } from '../adapters/GeminiAdapter';
 import { BeeConfig } from './BeeConfig';
 import { Bee } from './Bee';
+
+export interface BeeManagerOptions {
+  /** Used to construct the default GeminiAdapter when no llmAdapter is given. */
+  apiKey?: string;
+  llmAdapter?: LLMAdapter;
+  storageProvider?: StorageProvider;
+  contextProvider?: ContextProvider;
+  eventPublisher?: EventPublisher;
+}
 
 export interface BeeDefinition {
   name: string;
@@ -9,6 +22,12 @@ export interface BeeDefinition {
   tools: Tool[];
   model?: string;
   maxIterations?: number;
+  /** Per-Bee overrides. Default to the BeeManager-level providers when omitted. */
+  llmAdapter?: LLMAdapter;
+  storageProvider?: StorageProvider;
+  contextProvider?: ContextProvider;
+  eventPublisher?: EventPublisher;
+  queueConfig?: QueueConfig;
 }
 
 export interface BeeStats {
@@ -22,44 +41,60 @@ export interface BeeStats {
 /**
  * BeeManager - Global Orchestrator
  *
- * Initializes BeeConfig + the LLM on startup, creates auto-configured
- * Bees, coordinates multi-Bee task execution, and reconfigures every
- * Bee in memory when the underlying model/plan changes.
+ * Initializes BeeConfig + a default LLMAdapter on startup, creates
+ * auto-configured Bees, coordinates multi-Bee task execution, and
+ * reconfigures every Bee in memory when the underlying model/plan
+ * changes. Every provider (LLM, storage, context, events) is injected -
+ * BeeManager never depends on a concrete backend.
  */
 export class BeeManager {
   private beeConfig: BeeConfig;
-  private llm: SimpleLLM;
+  private llm: LLMAdapter;
   private defaultModel: string;
   private bees: Map<string, Bee> = new Map();
 
-  constructor(defaultModel: string, apiKey?: string) {
+  private storageProvider?: StorageProvider;
+  private contextProvider?: ContextProvider;
+  private eventPublisher?: EventPublisher;
+
+  constructor(defaultModel: string, options: BeeManagerOptions = {}) {
     this.defaultModel = defaultModel;
     this.beeConfig = new BeeConfig();
-    this.llm = new SimpleLLM(apiKey, defaultModel);
+    this.llm = options.llmAdapter || new GeminiAdapter(options.apiKey, defaultModel);
+    this.storageProvider = options.storageProvider;
+    this.contextProvider = options.contextProvider;
+    this.eventPublisher = options.eventPublisher;
 
     const limits = this.beeConfig.getModelLimits(defaultModel);
 
     console.log('🐝 BeeManager initialized');
-    console.log(`   Model: ${defaultModel}`);
+    console.log(`   Model: ${defaultModel} (LLM adapter: ${this.llm.name})`);
     console.log(`   Rate limit: ${limits.requestsPerMinute} req/min`);
     console.log(`   Delay: ${limits.recommendedDelayMs}ms\n`);
   }
 
   /**
-   * Creates a new auto-configured Bee. If no model is given, the
-   * BeeManager's default model is used.
+   * Creates a new auto-configured Bee. Any provider omitted from the
+   * definition falls back to the BeeManager's own provider, if any.
    */
   createBee(definition: BeeDefinition): Bee {
     const model = definition.model || this.defaultModel;
+    const llm = definition.llmAdapter || this.llm;
 
     const bee = new Bee(
       definition.name,
       definition.prompt,
       definition.tools,
-      this.llm,
+      llm,
       this.beeConfig,
       model,
-      definition.maxIterations ?? 3
+      {
+        maxIterations: definition.maxIterations ?? 3,
+        storageProvider: definition.storageProvider || this.storageProvider,
+        contextProvider: definition.contextProvider || this.contextProvider,
+        eventPublisher: definition.eventPublisher || this.eventPublisher,
+        queueConfig: definition.queueConfig
+      }
     );
 
     this.bees.set(definition.name, bee);
@@ -170,7 +205,7 @@ export class BeeManager {
     console.log('═══════════════════════════════════════\n');
   }
 
-  getLLM(): SimpleLLM {
+  getLLM(): LLMAdapter {
     return this.llm;
   }
 
