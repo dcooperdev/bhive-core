@@ -1,7 +1,14 @@
+export interface ToolExecutionContext {
+  /** Name of the Bee currently executing this tool. */
+  beeName: string;
+  /** Delegates a task to another registered agent and resolves with its output. */
+  delegate: (agentName: string, task: string) => Promise<string>;
+}
+
 export interface Tool {
   name: string;
   description: string;
-  execute: (params: any) => Promise<string>;
+  execute: (params: any, context?: ToolExecutionContext) => Promise<string>;
 }
 
 export interface Message {
@@ -31,7 +38,10 @@ export type BeeEventType =
   | 'run:error'
   | 'queue:full'
   | 'queue:expired'
-  | 'retry';
+  | 'retry'
+  | 'delegation:start'
+  | 'delegation:complete'
+  | 'delegation:error';
 
 export interface BeeEvent {
   id: string;
@@ -40,6 +50,21 @@ export interface BeeEvent {
   type: BeeEventType;
   data: Record<string, unknown>;
 }
+
+export interface DelegationRequest {
+  from: string;
+  to: string;
+  task: string;
+  timestamp: Date;
+}
+
+/**
+ * How freely a Bee may delegate to other agents.
+ * - 'open': delegate to any agent registered with its BeeManager.
+ * - 'careful': delegate only to names listed in its `allowedDelegates`.
+ * - 'strict': never delegate; tools only.
+ */
+export type TrustLevel = 'open' | 'careful' | 'strict';
 
 export interface QueueConfig {
   /** Use a StorageProvider-backed list instead of an in-memory array. */

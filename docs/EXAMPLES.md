@@ -130,3 +130,54 @@ instanceB.createBee({ name: 'classifier', prompt: '...', tools: [classifyTool], 
 See `tests/integration.test.ts` (`Integration: multi-instance with
 shared providers`) for the same scenario as a runnable test, including
 what happens once the shared queue reaches `maxSize`.
+
+## Example: the same Hive, driven by delegation instead of executeTask()
+
+The version above orchestrates classifier → responder → executor from
+the outside, one `executeTask()` call per Bee. This version does the
+same three-Bee chain by having each Bee decide, on its own, to hand the
+task to the next agent — see [docs/DELEGATION.md](./DELEGATION.md) for
+the full pattern.
+
+```typescript
+import { BeeManager, createDelegationTool } from '@hiveai/core';
+
+const beeManager = new BeeManager('gemini-1.5-flash', {
+  apiKey: process.env.GOOGLE_API_KEY,
+  eventPublisher // reuse the same shared bus as above for one unified event stream
+});
+
+beeManager.createBee({
+  name: 'classifier',
+  prompt: `Classify the email as VIP/SPAM/NORMAL using classify_email.
+    For anything that needs a reply, delegate drafting one to the responder agent.`,
+  tools: [classifyTool, createDelegationTool('responder', 'Delegate drafting an email response')]
+});
+
+beeManager.createBee({
+  name: 'responder',
+  prompt: `Draft a reply based on the classification, then delegate applying
+    the outcome to the executor agent.`,
+  tools: [createDelegationTool('executor', 'Delegate applying the final outcome')]
+});
+
+beeManager.createBee({
+  name: 'executor',
+  prompt: 'Apply the right label based on the classification and reply.',
+  tools: [labelTool]
+  // No delegation tool here - the executor is the end of the chain.
+});
+
+// A single call into the classifier runs the entire chain. No
+// executeTask(), no manual sequencing of the three Bees.
+const result = await beeManager
+  .getBee('classifier')!
+  .run('Process email:\nFrom: boss@company.com\nSubject: Quarterly Review\nEmail ID: 1');
+
+beeManager.getDelegationHistory();
+// [{ from: 'classifier', to: 'responder', ... }, { from: 'responder', to: 'executor', ... }]
+```
+
+Both styles compose: nothing stops a Bee reached via `executeTask()`
+from *also* delegating further on its own, or a `run()`-driven chain
+from being triggered as one step of a larger `executeTask()` sequence.

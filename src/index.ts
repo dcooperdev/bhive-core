@@ -1,6 +1,7 @@
 export { BeeManager, BeeManagerOptions, BeeDefinition, BeeStats } from './bee/BeeManager';
 export { Bee, BeeProviderOptions } from './bee/Bee';
 export { BeeConfig, ModelLimits } from './bee/BeeConfig';
+export { createDelegationTool } from './bee/delegationTools';
 
 export { SimpleLLM } from './llm/SimpleLLM';
 export { GeminiAdapter } from './adapters/GeminiAdapter';
@@ -19,4 +20,15 @@ export {
   BeeEventHandler
 } from './providers';
 
-export { Tool, Message, ToolCall, AgentRun, BeeEvent, BeeEventType, QueueConfig } from './types';
+export {
+  Tool,
+  Message,
+  ToolCall,
+  AgentRun,
+  BeeEvent,
+  BeeEventType,
+  QueueConfig,
+  ToolExecutionContext,
+  DelegationRequest,
+  TrustLevel
+} from './types';

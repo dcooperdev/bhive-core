@@ -1,10 +1,21 @@
 import { randomUUID } from 'crypto';
-import { Message, Tool, ToolCall, AgentRun, BeeEvent, BeeEventType, QueueConfig } from '../types';
+import {
+  Message,
+  Tool,
+  ToolCall,
+  AgentRun,
+  BeeEvent,
+  BeeEventType,
+  QueueConfig,
+  ToolExecutionContext,
+  TrustLevel
+} from '../types';
 import { LLMAdapter } from '../providers/LLMAdapter';
 import { StorageProvider } from '../providers/StorageProvider';
 import { ContextProvider } from '../providers/ContextProvider';
 import { EventPublisher } from '../providers/EventBus';
 import { BeeConfig, ModelLimits } from './BeeConfig';
+import type { BeeManager } from './BeeManager';
 
 export interface BeeProviderOptions {
   maxIterations?: number;
@@ -12,12 +23,19 @@ export interface BeeProviderOptions {
   eventPublisher?: EventPublisher;
   contextProvider?: ContextProvider;
   queueConfig?: QueueConfig;
+  /** Set by BeeManager.createBee() so the Bee can discover/delegate to its siblings. */
+  beeManager?: BeeManager;
+  /** How freely this Bee may delegate to other agents. Defaults to 'open'. */
+  trustLevel?: TrustLevel;
+  /** Required when trustLevel is 'careful': the only agent names this Bee may delegate to. */
+  allowedDelegates?: string[];
 }
 
 interface QueueItem {
   id: string;
   input: string;
   enqueuedAt: number;
+  delegationChain: string[];
 }
 
 const MAX_CONTEXT_MESSAGES = 20;
@@ -43,6 +61,10 @@ export class Bee {
   private eventPublisher?: EventPublisher;
   private contextProvider?: ContextProvider;
   private queueConfig: QueueConfig;
+
+  private beeManager?: BeeManager;
+  private trustLevel: TrustLevel;
+  private allowedDelegates: string[];
 
   private config: ModelLimits;
   private lastRequestTime = 0;
@@ -71,6 +93,9 @@ export class Bee {
     this.eventPublisher = options.eventPublisher;
     this.contextProvider = options.contextProvider;
     this.queueConfig = options.queueConfig ?? {};
+    this.beeManager = options.beeManager;
+    this.trustLevel = options.trustLevel ?? 'open';
+    this.allowedDelegates = options.allowedDelegates ?? [];
 
     if (this.queueConfig.persist && !this.storageProvider) {
       console.log(
@@ -129,6 +154,37 @@ export class Bee {
     return this.currentQueueLength();
   }
 
+  /** Names of every other agent registered with this Bee's BeeManager, if any. */
+  getAvailableAgents(): string[] {
+    if (!this.beeManager) return [];
+    return this.beeManager.getRegisteredAgents().filter(name => name !== this.name);
+  }
+
+  /**
+   * Delegates a task to another agent registered with the same
+   * BeeManager, and resolves with that agent's output. Requires this
+   * Bee to have been created via BeeManager.createBee().
+   */
+  async delegateTo(agentName: string, task: string, chain: string[] = [this.name]): Promise<string> {
+    if (!this.beeManager) {
+      throw new Error(
+        `Bee "${this.name}" cannot delegate: it was not created via BeeManager.createBee()`
+      );
+    }
+
+    if (this.trustLevel === 'strict') {
+      throw new Error(`Bee "${this.name}" has trustLevel "strict" and cannot delegate to other agents`);
+    }
+
+    if (this.trustLevel === 'careful' && !this.allowedDelegates.includes(agentName)) {
+      throw new Error(
+        `Bee "${this.name}" (trustLevel "careful") is not allowed to delegate to "${agentName}"`
+      );
+    }
+
+    return this.beeManager.delegateToAgent(this.name, agentName, task, chain);
+  }
+
   /**
    * Enqueues a task behind any pending work on this Bee, then processes
    * it once its turn comes, respecting rate limiting. The queue is
@@ -136,8 +192,8 @@ export class Bee {
    * when `queueConfig.persist` and a storageProvider are both set,
    * otherwise it's a plain in-memory array.
    */
-  async run(input: string): Promise<string> {
-    const item: QueueItem = { id: randomUUID(), input, enqueuedAt: Date.now() };
+  async run(input: string, delegationChain: string[] = [this.name]): Promise<string> {
+    const item: QueueItem = { id: randomUUID(), input, enqueuedAt: Date.now(), delegationChain };
 
     const queueLength = await this.currentQueueLength();
     if (this.queueConfig.maxSize !== undefined && queueLength >= this.queueConfig.maxSize) {
@@ -180,10 +236,10 @@ export class Bee {
       return output;
     }
 
-    return this.executeWithRateLimit(item.input);
+    return this.executeWithRateLimit(item.input, item.delegationChain);
   }
 
-  private async executeWithRateLimit(input: string): Promise<string> {
+  private async executeWithRateLimit(input: string, delegationChain: string[]): Promise<string> {
     await this.applyDelay();
     await this.emitEvent('run:start', { input });
 
@@ -195,6 +251,11 @@ export class Bee {
       ...history,
       { role: 'user', content: `${this.prompt}\n\nTask: ${input}` }
     ];
+
+    const toolContext: ToolExecutionContext = {
+      beeName: this.name,
+      delegate: (agentName, task) => this.delegateTo(agentName, task, delegationChain)
+    };
 
     const toolCalls: ToolCall[] = [];
     let output = '';
@@ -225,7 +286,7 @@ export class Bee {
           }
 
           try {
-            const result = await tool.execute(call.params);
+            const result = await tool.execute(call.params, toolContext);
 
             console.log(`   → ${tool.name}(${JSON.stringify(call.params).substring(0, 40)})`);
             console.log(`   ← ${result.substring(0, 60)}`);

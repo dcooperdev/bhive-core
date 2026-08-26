@@ -2,8 +2,10 @@ jest.mock('axios');
 
 import axios from 'axios';
 import { BeeManager } from '../src/bee/BeeManager';
+import { createDelegationTool } from '../src/bee/delegationTools';
 import { InMemoryStorage } from '../src/storage/InMemoryStorage';
 import { InMemoryEventBus } from '../src/events/InMemoryEventBus';
+import { MockLLM } from './__mocks__/MockLLM';
 import { testEmails } from './fixtures/emails';
 import { mockClassifyTool, mockLabelTool } from './fixtures/tools';
 
@@ -195,5 +197,74 @@ describe('Integration: multi-instance with shared providers', () => {
     instanceB.createBee({ name: 'worker', prompt: 'Work', tools: [], queueConfig });
 
     await expect(instanceB.getBee('worker')!.run('New task')).rejects.toThrow(/Queue full/);
+  });
+});
+
+describe('Integration: Email Manager full chain via pure delegation', () => {
+  it('should flow Classifier → Responder → Executor through delegation only, never calling executeTask()', async () => {
+    const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
+
+    const classifierLLM = new MockLLM();
+    const responderLLM = new MockLLM();
+    const executorLLM = new MockLLM();
+
+    beeManager.createBee({
+      name: 'classifier',
+      prompt: 'Classify the email and delegate the response',
+      tools: [mockClassifyTool, createDelegationTool('responder', 'Delegate email response')],
+      llmAdapter: classifierLLM
+    });
+
+    beeManager.createBee({
+      name: 'responder',
+      prompt: 'Draft a response and delegate execution',
+      tools: [createDelegationTool('executor', 'Delegate applying the outcome')],
+      llmAdapter: responderLLM
+    });
+
+    beeManager.createBee({
+      name: 'executor',
+      prompt: 'Apply the final label',
+      tools: [mockLabelTool],
+      llmAdapter: executorLLM
+    });
+
+    classifierLLM.respondOnceWith({
+      content: 'Classified as VIP, delegating to responder',
+      toolCalls: [
+        { name: 'classify_email', params: { from: testEmails.vip.from, subject: testEmails.vip.subject } },
+        { name: 'delegate_to_responder', params: { task: 'Draft a VIP reply' } }
+      ]
+    });
+    classifierLLM.respondOnceWith({ content: 'Classifier finished', toolCalls: [] });
+
+    responderLLM.respondOnceWith({
+      content: 'Draft ready, delegating to executor',
+      toolCalls: [{ name: 'delegate_to_executor', params: { task: 'Apply VIP label to email 1' } }]
+    });
+    responderLLM.respondOnceWith({ content: 'Responder finished', toolCalls: [] });
+
+    executorLLM.respondOnceWith({ content: 'Executor finished', toolCalls: [] });
+
+    // The whole chain runs off a single direct call to the classifier -
+    // no BeeManager.executeTask() involved anywhere in this flow.
+    const classifier = beeManager.getBee('classifier')!;
+    const finalResult = await classifier.run(`Process email: ${testEmails.vip.subject}`);
+
+    expect(finalResult).toBe('Classifier finished');
+
+    const responder = beeManager.getBee('responder')!;
+    const executor = beeManager.getBee('executor')!;
+
+    expect(responder.getRuns()).toHaveLength(1);
+    expect(responder.getRuns()[0].input).toBe('Draft a VIP reply');
+
+    expect(executor.getRuns()).toHaveLength(1);
+    expect(executor.getRuns()[0].input).toBe('Apply VIP label to email 1');
+
+    expect(beeManager.getDelegationHistory().map(d => `${d.from}->${d.to}`)).toEqual([
+      'classifier->responder',
+      'responder->executor'
+    ]);
   });
 });

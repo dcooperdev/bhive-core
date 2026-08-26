@@ -1,4 +1,5 @@
-import { Tool, QueueConfig } from '../types';
+import { randomUUID } from 'crypto';
+import { Tool, QueueConfig, BeeEvent, DelegationRequest, TrustLevel } from '../types';
 import { LLMAdapter } from '../providers/LLMAdapter';
 import { StorageProvider } from '../providers/StorageProvider';
 import { ContextProvider } from '../providers/ContextProvider';
@@ -28,6 +29,10 @@ export interface BeeDefinition {
   contextProvider?: ContextProvider;
   eventPublisher?: EventPublisher;
   queueConfig?: QueueConfig;
+  /** How freely this Bee may delegate to other agents. Defaults to 'open'. */
+  trustLevel?: TrustLevel;
+  /** Required when trustLevel is 'careful': the only agent names this Bee may delegate to. */
+  allowedDelegates?: string[];
 }
 
 export interface BeeStats {
@@ -56,6 +61,8 @@ export class BeeManager {
   private storageProvider?: StorageProvider;
   private contextProvider?: ContextProvider;
   private eventPublisher?: EventPublisher;
+
+  private delegationHistory: DelegationRequest[] = [];
 
   constructor(defaultModel: string, options: BeeManagerOptions = {}) {
     this.defaultModel = defaultModel;
@@ -93,7 +100,10 @@ export class BeeManager {
         storageProvider: definition.storageProvider || this.storageProvider,
         contextProvider: definition.contextProvider || this.contextProvider,
         eventPublisher: definition.eventPublisher || this.eventPublisher,
-        queueConfig: definition.queueConfig
+        queueConfig: definition.queueConfig,
+        beeManager: this,
+        trustLevel: definition.trustLevel,
+        allowedDelegates: definition.allowedDelegates
       }
     );
 
@@ -104,6 +114,79 @@ export class BeeManager {
 
   getBee(name: string): Bee | undefined {
     return this.bees.get(name);
+  }
+
+  /** Names of every Bee registered with this BeeManager. */
+  getRegisteredAgents(): string[] {
+    return Array.from(this.bees.keys());
+  }
+
+  /**
+   * Delegates a task from one registered Bee to another and resolves
+   * with the target's output. Used internally by Bee.delegateTo() (and
+   * by delegation tools created via createDelegationTool), but can also
+   * be called directly.
+   */
+  async delegateToAgent(
+    fromBeeName: string,
+    toBeeName: string,
+    task: string,
+    chain: string[] = [fromBeeName]
+  ): Promise<string> {
+    const request: DelegationRequest = { from: fromBeeName, to: toBeeName, task, timestamp: new Date() };
+    this.delegationHistory.push(request);
+
+    const targetBee = this.bees.get(toBeeName);
+
+    if (!targetBee) {
+      const error = new Error(`Delegation failed: agent "${toBeeName}" is not registered with this BeeManager`);
+      await this.emitDelegationEvent('delegation:error', request, { error: error.message });
+      throw error;
+    }
+
+    if (chain.includes(toBeeName)) {
+      const error = new Error(`Circular delegation detected: ${[...chain, toBeeName].join(' -> ')}`);
+      await this.emitDelegationEvent('delegation:error', request, { error: error.message });
+      throw error;
+    }
+
+    await this.emitDelegationEvent('delegation:start', request);
+
+    try {
+      const result = await targetBee.run(task, [...chain, toBeeName]);
+      await this.emitDelegationEvent('delegation:complete', request, { result });
+      return result;
+    } catch (error) {
+      await this.emitDelegationEvent('delegation:error', request, { error: (error as Error).message });
+      throw error;
+    }
+  }
+
+  /** Every delegation attempted through this BeeManager, oldest first. */
+  getDelegationHistory(): DelegationRequest[] {
+    return [...this.delegationHistory];
+  }
+
+  private async emitDelegationEvent(
+    type: 'delegation:start' | 'delegation:complete' | 'delegation:error',
+    request: DelegationRequest,
+    extra: Record<string, unknown> = {}
+  ): Promise<void> {
+    if (!this.eventPublisher) return;
+
+    const event: BeeEvent = {
+      id: randomUUID(),
+      timestamp: new Date(),
+      beeName: request.from,
+      type,
+      data: { from: request.from, to: request.to, task: request.task, ...extra }
+    };
+
+    try {
+      await this.eventPublisher.publish(event);
+    } catch (error) {
+      console.error(`   ⚠️  Failed to publish event "${type}": ${(error as Error).message}`);
+    }
   }
 
   /**

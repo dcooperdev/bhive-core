@@ -8,7 +8,7 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
   private responseOverrides: Map<string, string> = new Map();
   private failNextWith: (Error & { response?: { status: number } }) | null = null;
   private hangNext = false;
-  private queuedResponse: { content: string; toolCalls?: any[] } | null = null;
+  private queuedResponses: { content: string; toolCalls?: any[] }[] = [];
   private nextDelayMs = 0;
 
   constructor() {
@@ -39,9 +39,8 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
       throw error;
     }
 
-    if (this.queuedResponse) {
-      const response = this.queuedResponse;
-      this.queuedResponse = null;
+    if (this.queuedResponses.length > 0) {
+      const response = this.queuedResponses.shift()!;
       (this as any).totalTokens += 100;
       return response;
     }
@@ -81,9 +80,15 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
     this.responseOverrides.set(prompt, response);
   }
 
-  /** Makes the next complete() call return this exact response (including tool calls). */
+  /**
+   * Queues an exact response (including tool calls) for the next
+   * complete() call. Call it multiple times in a row to script a
+   * sequence of responses across several iterations/calls - each
+   * consumed in FIFO order before falling back to the default mock
+   * response logic.
+   */
   respondOnceWith(response: { content: string; toolCalls?: any[] }): void {
-    this.queuedResponse = response;
+    this.queuedResponses.push(response);
   }
 
   /** Makes the next complete() call reject with the given error. */

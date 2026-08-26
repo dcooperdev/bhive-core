@@ -8,6 +8,7 @@ Your agents. Your infrastructure.
 ✅ Storage-agnostic (Redis, Mongo, SQL—your choice)
 ✅ Event-driven architecture (Kafka, WebSocket, etc)
 ✅ LLM-agnostic (Gemini, OpenAI, Anthropic, local)
+✅ Agent-to-agent delegation (subagents, ConnectOnion-style)
 ✅ Kubernetes-ready, day 1
 ✅ Distributed from the start
 
@@ -75,9 +76,44 @@ Every provider can also be overridden per-Bee (`createBee({ llmAdapter, storageP
 
 See [docs/PROVIDERS.md](./docs/PROVIDERS.md) for how to write a custom adapter, and [docs/EXAMPLES.md](./docs/EXAMPLES.md) for a full Email Manager Hive built on providers.
 
+### Agent-to-agent delegation
+
+Bees can hand a task directly to another Bee and get its result back —
+no `executeTask()` orchestration required. Attach a delegation tool and
+let the LLM decide when to use it:
+
+```typescript
+import { BeeManager, createDelegationTool } from '@hiveai/core';
+
+const beeManager = new BeeManager('gemini-1.5-flash');
+
+beeManager.createBee({
+  name: 'classifier',
+  prompt: 'Classify the email, then delegate drafting a reply to the responder agent.',
+  tools: [classifyTool, createDelegationTool('responder', 'Delegate email response')]
+});
+
+beeManager.createBee({
+  name: 'responder',
+  prompt: 'Draft a professional reply.',
+  tools: []
+});
+
+// One call. Classifier decides on its own whether to delegate to responder.
+const result = await beeManager.getBee('classifier')!.run('Process email: ...');
+```
+
+Delegation respects the same providers as everything else in Hive:
+attempts publish `delegation:start`/`delegation:complete`/`delegation:error`
+through the configured `EventPublisher`, circular delegation chains are
+rejected instead of looping forever, and a Bee's `trustLevel` can
+restrict who it's allowed to delegate to at all. See
+[docs/DELEGATION.md](./docs/DELEGATION.md) and [docs/TRUST.md](./docs/TRUST.md).
+
 ## Features
 - Auto-detected rate limits, delays, and timeouts per model (`BeeConfig`)
 - **Provider Pattern**: `LLMAdapter`, `StorageProvider`, `ContextProvider`, `EventPublisher`/`EventSubscriber` — Hive depends only on these interfaces, never on a concrete backend
+- **Agent-to-agent delegation**: `Bee.delegateTo()` / `BeeManager.delegateToAgent()` / `createDelegationTool()`, with circular-delegation detection and per-Bee `trustLevel`
 - Storage-backed, multi-instance-safe queue with `maxSize` and `ttl`, or a plain in-memory queue when no storage is configured
 - Conversation context persisted across runs via `ContextProvider`
 - Bee lifecycle events (`run:start`, `run:complete`, `run:error`, `retry`, `queue:full`, `queue:expired`, ...) published through `EventPublisher`
@@ -86,7 +122,7 @@ See [docs/PROVIDERS.md](./docs/PROVIDERS.md) for how to write a custom adapter, 
 - In-memory `restart()` to reconfigure all Bees after a plan change
 
 ## Architecture
-See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, and [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on.
+See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on, and [docs/DELEGATION.md](./docs/DELEGATION.md) / [docs/TRUST.md](./docs/TRUST.md) for agent-to-agent delegation.
 
 ```
 src/
@@ -104,10 +140,11 @@ src/
 ├── llm/
 │   └── SimpleLLM.ts      — raw HTTP client for the Gemini API
 ├── bee/
-│   ├── BeeConfig.ts      — model limits registry + auto-detection
-│   ├── Bee.ts            — individual auto-configured agent
-│   └── BeeManager.ts     — global orchestrator
-├── types.ts              — Tool, Message, ToolCall, AgentRun, BeeEvent, QueueConfig
+│   ├── BeeConfig.ts        — model limits registry + auto-detection
+│   ├── Bee.ts              — individual auto-configured agent
+│   ├── BeeManager.ts       — global orchestrator + agent registry/delegation
+│   └── delegationTools.ts  — createDelegationTool() Tool factory
+├── types.ts              — Tool, Message, ToolCall, AgentRun, BeeEvent, QueueConfig, DelegationRequest
 └── index.ts              — public package exports
 ```
 
