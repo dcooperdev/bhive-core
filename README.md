@@ -1,27 +1,34 @@
-# 🐝 Hive - Multi-Agent AI Framework
+# 🐝 Hive - Multi-Agent AI Framework for Production
 
-`@hiveai/core`: a multi-agent AI framework built around a **Provider
-Pattern**. `Bee`/`BeeManager` never depend on a concrete LLM, storage,
-context, or event-bus backend — only on small interfaces. You plug in
-whichever implementation fits your stack (Gemini or your own LLM
-adapter, Redis/Mongo/Postgres or your own storage, Kafka/WebSocket or
-your own event bus). Nothing in the framework changes when you swap one
-out.
+Multi-Agent Framework for Production.
+
+Your agents. Your infrastructure.
+
+✅ Queue-based concurrency (no DAGs, no state machines)
+✅ Storage-agnostic (Redis, Mongo, SQL—your choice)
+✅ Event-driven architecture (Kafka, WebSocket, etc)
+✅ LLM-agnostic (Gemini, OpenAI, Anthropic, local)
+✅ Kubernetes-ready, day 1
+✅ Distributed from the start
+
+Stop building for single-instance.
+Start building for production.
 
 ## Quick Start
 
 ### 1. Install Dependencies
-npm install
+`npm install`
 
 ### 2. Setup .env
-cp .env.example .env
+`cp .env.example .env`
+
 # Edit .env and add your Google (Gemini) API key
 
 ### 3. Build
-npm run build
+`npm run build`
 
 ### 4. Run Tests
-npm test
+`npm test`
 
 ## Usage
 
