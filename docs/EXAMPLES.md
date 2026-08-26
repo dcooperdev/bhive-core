@@ -11,7 +11,7 @@ import {
   InMemoryStorage,
   InMemoryEventBus,
   Tool
-} from 'bhive';
+} from '@bhive/core';
 
 // --- Tools -----------------------------------------------------------
 
@@ -140,7 +140,7 @@ task to the next agent — see [docs/DELEGATION.md](./DELEGATION.md) for
 the full pattern.
 
 ```typescript
-import { BeeManager, createDelegationTool } from 'bhive';
+import { BeeManager, createDelegationTool } from '@bhive/core';
 
 const beeManager = new BeeManager('gemini-1.5-flash', {
   apiKey: process.env.GOOGLE_API_KEY,

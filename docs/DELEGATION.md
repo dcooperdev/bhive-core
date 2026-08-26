@@ -24,7 +24,7 @@ own rate limits, queue, and storage exactly like any other run.
 ## Wiring it up
 
 ```typescript
-import { BeeManager, createDelegationTool } from 'bhive';
+import { BeeManager, createDelegationTool } from '@bhive/core';
 
 const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: process.env.GOOGLE_API_KEY });
 
