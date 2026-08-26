@@ -28,7 +28,7 @@ const beeManager = new BeeManager('gemini-1.5-flash');
 
 beeManager.createBee({
   name: 'classifier',
-  prompt: 'Classify emails as VIP/SPAM/NORMAL',
+  prompt: 'Classify emails as WORK/SPAM/NORMAL',
   tools: [classifyTool]
 });
 
