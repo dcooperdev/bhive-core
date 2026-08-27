@@ -1,10 +1,13 @@
 {
   "name": "@bhive-ai/core",
-  "version": "0.4.0",
-  "description": "Hive - Multi-Agent AI Framework with a Provider Pattern architecture and a secure agent-to-agent communication protocol (signing, encryption, prompt-injection defense, attestation, audit logging)",
+  "version": "0.5.0",
+  "description": "Multi-Agent AI Framework with Provider-Agnostic Tool-Calling",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",

@@ -148,6 +148,29 @@ actually get caught.
 - Token/cost tracking and a `printSummary()` / `getBeeStats()` report
 - In-memory `restart()` to reconfigure all Bees after a plan change
 
+## LLM Providers
+
+Bhive supports multiple LLM providers out of the box:
+
+✅ **Gemini** (Google) - Full tool-calling support
+✅ **OpenAI** (GPT-4, GPT-3.5) - Full tool-calling support
+✅ **Anthropic** (Claude) - Full tool-calling support
+✅ **Ollama** (Local/Self-hosted) - Best-effort support
+
+### Quick Start
+
+```typescript
+// Automatic detection from env var LLM_PROVIDER
+const manager = new BeeManager();
+
+// Or explicit selection
+const manager = new BeeManager({
+  llmProvider: 'openai',  // or 'anthropic', 'gemini', 'ollama'
+});
+```
+
+See [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for detailed setup for each provider.
+
 ## Architecture
 See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on, [docs/DELEGATION.md](./docs/DELEGATION.md) / [docs/TRUST.md](./docs/TRUST.md) for agent-to-agent delegation, and [docs/SECURITY.md](./docs/SECURITY.md) for the secure communication protocol.
 

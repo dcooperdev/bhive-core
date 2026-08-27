@@ -27,7 +27,7 @@ export class SimpleLLM {
   async complete(
     messages: Message[],
     tools?: Tool[]
-  ): Promise<{ content: string; toolCalls?: any[] }> {
+  ): Promise<{ content: string; toolCalls: any[] }> {
     this.callCount++;
 
     try {

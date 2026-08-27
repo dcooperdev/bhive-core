@@ -1,5 +1,6 @@
 import { Bee } from '../../src/bee/Bee';
 import { BeeConfig } from '../../src/bee/BeeConfig';
+import { BeeSecurityContext } from '../../src/bee/BeeSecurityContext';
 import { MockLLM } from '../__mocks__/MockLLM';
 import { mockClassifyTool } from '../fixtures/tools';
 import { RecordingEventPublisher, TestContextProvider } from '../fixtures/providers';
@@ -191,7 +192,41 @@ describe('Bee', () => {
   });
 
   describe('tool calling', () => {
-    it('should execute a matched tool, skip an unknown one, and log a failing one', async () => {
+    it('should execute a matched tool and feed its result back into the conversation', async () => {
+      bee = new Bee('tool-bee', 'Use your tools', [mockClassifyTool], mockLLM, beeConfig, 'gemini-1.5-flash');
+
+      mockLLM.respondOnceWith({
+        content: 'Calling tools',
+        toolCalls: [{ id: 't1', name: 'classify_email', args: { from: 'boss@company.com', subject: 'Hi' } }]
+      });
+      mockLLM.respondOnceWith({ content: 'Done classifying.', toolCalls: [] });
+
+      const result = await bee.run('Test input');
+
+      expect(result).toBe('Done classifying.');
+      const run = bee.getRuns()[0];
+      expect(run.toolCalls).toHaveLength(1);
+      expect(run.toolCalls[0].toolName).toBe('classify_email');
+      expect(run.toolCalls[0].result).toBe(JSON.stringify({ classification: 'VIP' }));
+    });
+
+    it('should reject a call to a tool the Bee does not have, without crashing the run', async () => {
+      bee = new Bee('tool-bee', 'Use your tools', [mockClassifyTool], mockLLM, beeConfig, 'gemini-1.5-flash');
+
+      mockLLM.respondOnceWith({
+        content: 'Calling tools',
+        toolCalls: [{ id: 't1', name: 'unknown_tool', args: {} }]
+      });
+      mockLLM.respondOnceWith({ content: 'Refused.', toolCalls: [] });
+
+      const result = await bee.run('Test input');
+
+      expect(result).toBe('Refused.');
+      const run = bee.getRuns()[0];
+      expect(run.toolCalls).toHaveLength(0);
+    });
+
+    it('should report a failing tool execution back into the conversation instead of dropping it silently', async () => {
       const failingTool: Tool = {
         name: 'failing_tool',
         description: 'Always throws',
@@ -200,33 +235,37 @@ describe('Bee', () => {
         }
       };
 
-      bee = new Bee(
-        'tool-bee',
-        'Use your tools',
-        [mockClassifyTool, failingTool],
-        mockLLM,
-        beeConfig,
-        'gemini-1.5-flash'
-      );
+      bee = new Bee('tool-bee', 'Use your tools', [failingTool], mockLLM, beeConfig, 'gemini-1.5-flash');
 
       mockLLM.respondOnceWith({
         content: 'Calling tools',
-        toolCalls: [
-          { name: 'classify_email', params: { from: 'boss@company.com', subject: 'Hi' } },
-          { name: 'unknown_tool', params: {} },
-          { name: 'failing_tool', params: {} }
-        ]
+        toolCalls: [{ id: 't1', name: 'failing_tool', args: {} }]
       });
+      mockLLM.respondOnceWith({ content: 'Could not run tool.', toolCalls: [] });
 
       const result = await bee.run('Test input');
 
-      // Second iteration gets the default mock response, since the tool
-      // result message that seeded it happens to contain "classify".
-      expect(result).toBe(JSON.stringify({ classification: 'NORMAL', priority: 'medium' }));
-
+      expect(result).toBe('Could not run tool.');
       const run = bee.getRuns()[0];
-      expect(run.toolCalls).toHaveLength(1);
-      expect(run.toolCalls[0].toolName).toBe('classify_email');
+      expect(run.toolCalls).toHaveLength(0);
+    });
+
+    it('should enforce a Bee-level tool allowlist even when the LLM calls a tool that otherwise exists', async () => {
+      const notAllowed: Tool = { name: 'apply_label', description: 'apply', execute: jest.fn(async () => 'ok') };
+
+      bee = new Bee('tool-bee', 'Use your tools', [mockClassifyTool, notAllowed], mockLLM, beeConfig, 'gemini-1.5-flash', {
+        securityContext: new BeeSecurityContext({ allowedTools: ['classify_email'] })
+      });
+
+      mockLLM.respondOnceWith({
+        content: 'Calling tools',
+        toolCalls: [{ id: 't1', name: 'apply_label', args: { emailId: '1', label: 'x' } }]
+      });
+      mockLLM.respondOnceWith({ content: 'done', toolCalls: [] });
+
+      await bee.run('Test input');
+
+      expect(notAllowed.execute).not.toHaveBeenCalled();
     });
   });
 

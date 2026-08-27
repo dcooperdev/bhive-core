@@ -1,0 +1,112 @@
+# LLM Providers
+
+`@bhive-ai/core` ships four `LLMAdapter` implementations. Every one of
+them sends tools in that provider's native format and parses tool calls back
+out through the same `ToolCallingParser`, so a Bee's prompt/tools/behavior
+don't change when you switch providers - only the adapter does.
+
+## Tool-calling support matrix
+
+| Provider  | Tool-calling | Auth                              | Notes                                                  |
+|-----------|:------------:|------------------------------------|---------------------------------------------------------|
+| Gemini    | ✅ Full      | `GOOGLE_API_KEY`                   | Sends `functionDeclarations` and parses `functionCall` parts back out. |
+| OpenAI    | ✅ Full      | `OPENAI_API_KEY`                   | Chat Completions `tools` / `tool_calls`.                |
+| Anthropic | ✅ Full      | `ANTHROPIC_API_KEY`                | Messages API `tools` / `tool_use` content blocks.       |
+| Ollama    | ⚠️ Basic     | none (local)                       | Best-effort: only tool-calling-capable local models (llama3.1, mistral-nemo, qwen2.5, ...) actually use `tools`; others silently answer in plain text instead of erroring. |
+
+## Choosing a provider
+
+Set `LLM_PROVIDER` in `.env` (see `.env.example`) or pass `llmProvider`
+directly:
+
+```ts
+import { BeeManager } from '@bhive-ai/core';
+
+const manager = new BeeManager({ llmProvider: 'openai' }); // reads OPENAI_API_KEY from env
+```
+
+The legacy positional form still works and is unaffected by any of this:
+
+```ts
+const manager = new BeeManager('gemini-1.5-flash', { apiKey: '...' });
+```
+
+### Gemini
+
+```ts
+import { BeeManager } from '@bhive-ai/core';
+const manager = new BeeManager({ llmProvider: 'gemini', apiKey: process.env.GOOGLE_API_KEY });
+```
+
+### OpenAI
+
+```ts
+import { BeeManager } from '@bhive-ai/core';
+const manager = new BeeManager({ llmProvider: 'openai', apiKey: process.env.OPENAI_API_KEY, model: 'gpt-4o-mini' });
+```
+
+### Anthropic
+
+```ts
+import { BeeManager } from '@bhive-ai/core';
+const manager = new BeeManager({ llmProvider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY, model: 'claude-3-5-sonnet-20241022' });
+```
+
+### Ollama (local)
+
+No API key. Point `OLLAMA_BASE_URL` at your local (or remote) Ollama server
+- it defaults to `http://localhost:11434`.
+
+```ts
+import { BeeManager } from '@bhive-ai/core';
+const manager = new BeeManager({ llmProvider: 'ollama', model: 'llama3.1' });
+```
+
+Pick a model that actually supports Ollama's `tools` field if you need real
+tool-calling - check with `ollama show <model>` (look for a `Tools` capability
+in the output). A model without it will still run, it just won't call tools.
+
+## Adding your own provider
+
+Implement `LLMAdapter` (`src/providers/LLMAdapter.ts`):
+
+```ts
+import { LLMAdapter, LLMResponse, Message, Tool } from '@bhive-ai/core';
+
+class MyAdapter implements LLMAdapter {
+  readonly name = 'my-provider';
+  async complete(messages: Message[], tools: Tool[] = []): Promise<LLMResponse> {
+    // 1. Convert `tools` to your provider's native tool/function schema.
+    //    See src/llm/toolCallingFormatters/*.ts for the pattern - each one
+    //    is ~15 lines mapping Tool.parameters (a small JSON-schema subset)
+    //    into that provider's shape.
+    // 2. Call your provider's HTTP API with messages + tools.
+    // 3. Extract tool calls with ToolCallingParser.parseFunctionCalls(
+    //      response.data, 'auto'  // or add a case for your shape in ToolCallingParser
+    //    ), or write your own extraction inline if the shape is unusual.
+    // 4. Return { content, toolCalls } - toolCalls must always be an array.
+    throw new Error('not implemented');
+  }
+  getTokens() { return 0; }
+  getCallCount() { return 0; }
+  resetStats() {}
+  setModel() {}
+  getModel() { return 'my-model'; }
+}
+```
+
+Then either pass an instance directly:
+
+```ts
+new BeeManager({ llmAdapter: new MyAdapter() });
+```
+
+or register it in `src/llm/providerRegistry.ts` (`PROVIDER_REGISTRY`) so it's
+selectable via `llmProvider: 'my-provider'` / `LLM_PROVIDER=my-provider` like
+the built-in four.
+
+Whatever you do, don't hand-roll tool-call *validation* in your adapter -
+`Bee.ts` already runs every call your adapter reports through
+`ToolCallValidator` (existence check, Bee-level allowlist, prototype-pollution
+and injection-pattern guards) before anything gets executed. Your adapter's
+only job is turning the provider's response into `RawToolCall[]`.

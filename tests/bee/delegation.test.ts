@@ -184,14 +184,14 @@ describe('Agent-to-agent delegation', () => {
 
       aLLM.respondOnceWith({
         content: 'Delegating to B',
-        toolCalls: [{ name: 'delegate_to_b', params: { task: 'do work' } }]
+        toolCalls: [{ id: 't1', name: 'delegate_to_b', args: { task: 'do work' } }]
       });
       aLLM.respondOnceWith({ content: 'Finished after B', toolCalls: [] });
 
       // B immediately tries to delegate straight back to A - a cycle.
       bLLM.respondOnceWith({
         content: 'Delegating back to A',
-        toolCalls: [{ name: 'delegate_to_a', params: { task: 'loop back' } }]
+        toolCalls: [{ id: 't2', name: 'delegate_to_a', args: { task: 'loop back' } }]
       });
       bLLM.respondOnceWith({ content: 'B finished', toolCalls: [] });
 
@@ -327,13 +327,13 @@ describe('Agent-to-agent delegation', () => {
 
       classifierLLM.respondOnceWith({
         content: 'Classified as VIP, delegating response',
-        toolCalls: [{ name: 'delegate_to_responder', params: { task: 'Draft a VIP reply' } }]
+        toolCalls: [{ id: 't1', name: 'delegate_to_responder', args: { task: 'Draft a VIP reply' } }]
       });
       classifierLLM.respondOnceWith({ content: 'Classifier done', toolCalls: [] });
 
       responderLLM.respondOnceWith({
         content: 'Draft ready, delegating execution',
-        toolCalls: [{ name: 'delegate_to_executor', params: { task: 'Apply VIP label' } }]
+        toolCalls: [{ id: 't2', name: 'delegate_to_executor', args: { task: 'Apply VIP label' } }]
       });
       responderLLM.respondOnceWith({ content: 'Responder done', toolCalls: [] });
 

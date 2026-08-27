@@ -232,15 +232,15 @@ describe('Integration: Email Manager full chain via pure delegation', () => {
     classifierLLM.respondOnceWith({
       content: 'Classified as VIP, delegating to responder',
       toolCalls: [
-        { name: 'classify_email', params: { from: testEmails.vip.from, subject: testEmails.vip.subject } },
-        { name: 'delegate_to_responder', params: { task: 'Draft a VIP reply' } }
+        { id: 't1', name: 'classify_email', args: { from: testEmails.vip.from, subject: testEmails.vip.subject } },
+        { id: 't2', name: 'delegate_to_responder', args: { task: 'Draft a VIP reply' } }
       ]
     });
     classifierLLM.respondOnceWith({ content: 'Classifier finished', toolCalls: [] });
 
     responderLLM.respondOnceWith({
       content: 'Draft ready, delegating to executor',
-      toolCalls: [{ name: 'delegate_to_executor', params: { task: 'Apply VIP label to email 1' } }]
+      toolCalls: [{ id: 't3', name: 'delegate_to_executor', args: { task: 'Apply VIP label to email 1' } }]
     });
     responderLLM.respondOnceWith({ content: 'Responder finished', toolCalls: [] });
 

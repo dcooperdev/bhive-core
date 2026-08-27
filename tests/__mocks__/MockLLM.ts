@@ -1,6 +1,6 @@
 import { SimpleLLM } from '../../src/llm/SimpleLLM';
-import { Message, Tool } from '../../src/types';
-import { LLMAdapter } from '../../src/providers/LLMAdapter';
+import { Message, RawToolCall, Tool } from '../../src/types';
+import { LLMAdapter, LLMResponse } from '../../src/providers/LLMAdapter';
 
 export class MockLLM extends SimpleLLM implements LLMAdapter {
   readonly name = 'mock';
@@ -8,7 +8,7 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
   private responseOverrides: Map<string, string> = new Map();
   private failNextWith: (Error & { response?: { status: number } }) | null = null;
   private hangNext = false;
-  private queuedResponses: { content: string; toolCalls?: any[] }[] = [];
+  private queuedResponses: { content: string; toolCalls?: RawToolCall[] }[] = [];
   private nextDelayMs = 0;
 
   constructor() {
@@ -16,10 +16,7 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
     super('mock-key', 'mock-model');
   }
 
-  async complete(
-    messages: Message[],
-    tools?: Tool[]
-  ): Promise<{ content: string; toolCalls?: any[] }> {
+  async complete(messages: Message[], tools?: Tool[]): Promise<LLMResponse> {
     (this as any).callCount++;
 
     if (this.nextDelayMs > 0) {
@@ -30,7 +27,7 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
 
     if (this.hangNext) {
       // Never resolves - used to exercise Bee's timeout handling.
-      return new Promise<{ content: string; toolCalls?: any[] }>(() => {});
+      return new Promise<LLMResponse>(() => {});
     }
 
     if (this.failNextWith) {
@@ -42,7 +39,7 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
     if (this.queuedResponses.length > 0) {
       const response = this.queuedResponses.shift()!;
       (this as any).totalTokens += 100;
-      return response;
+      return { content: response.content, toolCalls: response.toolCalls ?? [] };
     }
 
     const lastMessage = messages[messages.length - 1];
@@ -87,7 +84,7 @@ export class MockLLM extends SimpleLLM implements LLMAdapter {
    * consumed in FIFO order before falling back to the default mock
    * response logic.
    */
-  respondOnceWith(response: { content: string; toolCalls?: any[] }): void {
+  respondOnceWith(response: { content: string; toolCalls?: RawToolCall[] }): void {
     this.queuedResponses.push(response);
   }
 

@@ -1,3 +1,10 @@
+/** A minimal JSON-schema-ish description of a tool's arguments. */
+export interface ToolParameterSchema {
+  type: 'object';
+  properties: Record<string, { type: string; description?: string; enum?: string[] }>;
+  required?: string[];
+}
+
 export interface ToolExecutionContext {
   /** Name of the Bee currently executing this tool. */
   beeName: string;
@@ -8,12 +15,37 @@ export interface ToolExecutionContext {
 export interface Tool {
   name: string;
   description: string;
+  /**
+   * JSON-schema-ish description of this tool's arguments. Every LLMAdapter
+   * uses this (via src/llm/toolCallingFormatters/*) to build the
+   * provider-specific function/tool schema it sends upstream. Omit it for
+   * a tool that takes no arguments - it defaults to an empty-object schema.
+   */
+  parameters?: ToolParameterSchema;
   execute: (params: any, context?: ToolExecutionContext) => Promise<string>;
 }
 
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
+}
+
+/** A tool call exactly as reported by an LLMAdapter - unvalidated. */
+export interface RawToolCall {
+  id: string;
+  name: string;
+  args: unknown;
+}
+
+/** A tool call that passed ToolCallValidator - safe to execute. */
+export interface ValidatedToolCall {
+  toolName: string;
+  args: Record<string, unknown>;
+  metadata: {
+    id: string;
+    beeName: string;
+    validatedAt: number;
+  };
 }
 
 export interface ToolCall {
@@ -44,7 +76,8 @@ export type BeeEventType =
   | 'delegation:error'
   | 'delegation:security_error'
   | 'security:injection_detected'
-  | 'security:unauthorized_delegation';
+  | 'security:unauthorized_delegation'
+  | 'security:invalid_tool_call';
 
 export interface BeeEvent {
   id: string;
@@ -156,7 +189,8 @@ export type AuditEventType =
   | 'signature_failed'
   | 'injection_detected'
   | 'rate_limit_exceeded'
-  | 'unauthorized_delegation';
+  | 'unauthorized_delegation'
+  | 'invalid_tool_call';
 
 export interface AuditEntry {
   id: string;

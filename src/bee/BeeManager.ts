@@ -13,7 +13,7 @@ import { LLMAdapter } from '../providers/LLMAdapter';
 import { StorageProvider } from '../providers/StorageProvider';
 import { ContextProvider } from '../providers/ContextProvider';
 import { EventPublisher } from '../providers/EventBus';
-import { GeminiAdapter } from '../adapters/GeminiAdapter';
+import { createLLMAdapter, isKnownProvider, LLMProviderName, PROVIDER_REGISTRY } from '../llm/providerRegistry';
 import { BeeConfig } from './BeeConfig';
 import { Bee } from './Bee';
 import { BeeSecurityContext } from './BeeSecurityContext';
@@ -26,9 +26,13 @@ import { AuditLog } from '../security/AuditLog';
 import { SecurityError } from '../security/SecureMessage';
 
 export interface BeeManagerOptions {
-  /** Used to construct the default GeminiAdapter when no llmAdapter is given. */
+  /** Used to construct the default provider adapter when no llmAdapter is given. */
   apiKey?: string;
   llmAdapter?: LLMAdapter;
+  /** Which built-in adapter to auto-construct when `llmAdapter` isn't given. Defaults to the `LLM_PROVIDER` env var, then 'gemini'. */
+  llmProvider?: LLMProviderName;
+  /** Model name to use with the auto-constructed adapter. Defaults to that provider's registry default. */
+  model?: string;
   storageProvider?: StorageProvider;
   contextProvider?: ContextProvider;
   eventPublisher?: EventPublisher;
@@ -68,6 +72,18 @@ export interface BeeStats {
   runs: number;
 }
 
+function resolveProvider(explicit?: LLMProviderName): LLMProviderName {
+  if (explicit) return explicit;
+  const envProvider = process.env.LLM_PROVIDER;
+  if (envProvider && isKnownProvider(envProvider)) return envProvider;
+  if (envProvider) {
+    console.warn(
+      `   ⚠️  Unknown LLM_PROVIDER "${envProvider}", falling back to "gemini". Supported: ${Object.keys(PROVIDER_REGISTRY).join(', ')}`
+    );
+  }
+  return 'gemini';
+}
+
 /**
  * BeeManager - Global Orchestrator
  *
@@ -76,6 +92,15 @@ export interface BeeStats {
  * reconfigures every Bee in memory when the underlying model/plan
  * changes. Every provider (LLM, storage, context, events) is injected -
  * BeeManager never depends on a concrete backend.
+ *
+ * Two constructor forms are both supported:
+ *   new BeeManager('gemini-1.5-flash', { llmAdapter, eventPublisher, ... })   // legacy positional form
+ *   new BeeManager({ llmProvider: 'openai', apiKey, ... })                    // provider-picking form
+ *
+ * In the second form (or when the first argument is omitted entirely), the
+ * model and adapter are both resolved from `llmProvider` - falling back to
+ * the `LLM_PROVIDER` env var, then 'gemini' - via src/llm/providerRegistry.ts.
+ * See docs/LLM_PROVIDERS.md for the full provider table.
  */
 export class BeeManager {
   private beeConfig: BeeConfig;
@@ -97,10 +122,15 @@ export class BeeManager {
 
   private delegationHistory: DelegationRequest[] = [];
 
-  constructor(defaultModel: string, options: BeeManagerOptions = {}) {
+  constructor(modelOrOptions: string | BeeManagerOptions = {}, maybeOptions: BeeManagerOptions = {}) {
+    const options: BeeManagerOptions = typeof modelOrOptions === 'string' ? maybeOptions : modelOrOptions;
+    const provider = resolveProvider(options.llmProvider);
+    const defaultModel =
+      typeof modelOrOptions === 'string' ? modelOrOptions : options.model ?? PROVIDER_REGISTRY[provider].defaultModel;
+
     this.defaultModel = defaultModel;
     this.beeConfig = new BeeConfig();
-    this.llm = options.llmAdapter || new GeminiAdapter(options.apiKey, defaultModel);
+    this.llm = options.llmAdapter || createLLMAdapter(provider, options.apiKey, defaultModel);
     this.storageProvider = options.storageProvider;
     this.contextProvider = options.contextProvider;
     this.eventPublisher = options.eventPublisher;

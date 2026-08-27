@@ -168,13 +168,13 @@ describe('Security integration scenarios', () => {
 
     classifierLLM.respondOnceWith({
       content: 'Classified, delegating to responder',
-      toolCalls: [{ name: 'delegate_to_responder', params: { task: 'Draft a reply' } }]
+      toolCalls: [{ id: 't1', name: 'delegate_to_responder', args: { task: 'Draft a reply' } }]
     });
     classifierLLM.respondOnceWith({ content: 'Classifier done', toolCalls: [] });
 
     responderLLM.respondOnceWith({
       content: 'Draft ready, delegating to executor',
-      toolCalls: [{ name: 'delegate_to_executor', params: { task: 'Apply the label' } }]
+      toolCalls: [{ id: 't2', name: 'delegate_to_executor', args: { task: 'Apply the label' } }]
     });
     responderLLM.respondOnceWith({ content: 'Responder done', toolCalls: [] });
 

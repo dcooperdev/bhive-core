@@ -6,13 +6,12 @@ export { BeeSecurityContext, MessageValidationResult } from './bee/BeeSecurityCo
 export { BeeIdentityManager, getDefaultBeeIdentityManager } from './bee/BeeIdentityManager';
 
 export { SimpleLLM } from './llm/SimpleLLM';
-export { GeminiAdapter } from './adapters/GeminiAdapter';
 export { InMemoryStorage } from './storage/InMemoryStorage';
 export { InMemoryEventBus } from './events/InMemoryEventBus';
 
 export {
   LLMAdapter,
-  LLMToolCall,
+  LLMResponse,
   LLMCompletionResult,
   StorageProvider,
   ContextProvider,
@@ -22,8 +21,24 @@ export {
   BeeEventHandler
 } from './providers';
 
+// --- LLM adapters - provider-agnostic tool-calling (v0.5.0) ----------------
+
+export { BaseLLMAdapter, GeminiAdapter, OpenAIAdapter, AnthropicAdapter, OllamaAdapter } from './llm/adapters';
+export { ToolCallingParser, ProviderHint } from './llm/ToolCallingParser';
+export {
+  createLLMAdapter,
+  isKnownProvider,
+  PROVIDER_REGISTRY,
+  LLMProviderName,
+  ProviderDescriptor
+} from './llm/providerRegistry';
+export { toGeminiFunctionDeclarations } from './llm/toolCallingFormatters/geminiToolFormatter';
+export { toOpenAITools } from './llm/toolCallingFormatters/openaiToolFormatter';
+export { toAnthropicTools } from './llm/toolCallingFormatters/anthropicToolFormatter';
+
 // --- Secure Agent Communication (v0.4.0) -----------------------------------
 
+export { ToolCallValidator, ToolCallValidationResult } from './security/ToolCallValidator';
 export { MessageSigner, SignedEnvelope, VerificationResult } from './security/MessageSigner';
 export { MessageEncryption, EncryptedPayload } from './security/MessageEncryption';
 export { PromptInjectionDetector } from './security/PromptInjectionDetector';
@@ -48,7 +63,10 @@ export {
 
 export {
   Tool,
+  ToolParameterSchema,
   Message,
+  RawToolCall,
+  ValidatedToolCall,
   ToolCall,
   AgentRun,
   BeeEvent,

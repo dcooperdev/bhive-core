@@ -19,6 +19,7 @@ import { BeeConfig, ModelLimits } from './BeeConfig';
 import { BeeSecurityContext } from './BeeSecurityContext';
 import { BeeIdentityManager } from './BeeIdentityManager';
 import { PromptInjectionDetector } from '../security/PromptInjectionDetector';
+import { ToolCallValidator } from '../security/ToolCallValidator';
 import { AuditLog } from '../security/AuditLog';
 import type { BeeManager } from './BeeManager';
 
@@ -58,6 +59,13 @@ const MAX_CONTEXT_MESSAGES = 20;
  * BeeConfig on construction. Depends only on the LLMAdapter/
  * StorageProvider/ContextProvider/EventPublisher interfaces, never on a
  * concrete backend - callers plug in whichever implementation they want.
+ *
+ * Every tool call an LLMAdapter reports is run through ToolCallValidator -
+ * which checks the tool actually exists on this Bee, is on its allowlist
+ * (if any), and that its arguments aren't an injection/prototype-pollution/
+ * oversized payload - before `tool.execute()` is ever called. A rejected
+ * or failing tool call is reported back into the conversation instead of
+ * silently vanishing, so the model can react to it on its next turn.
  */
 export class Bee {
   private name: string;
@@ -79,6 +87,7 @@ export class Bee {
   private identity: BeeIdentity;
   private auditLog?: AuditLog;
   private injectionDetector = new PromptInjectionDetector();
+  private toolCallValidator = new ToolCallValidator();
 
   private config: ModelLimits;
   private lastRequestTime = 0;
@@ -331,28 +340,37 @@ export class Bee {
           break;
         }
 
-        for (const call of response.toolCalls) {
-          const tool = this.tools.find(t => t.name === call.name);
+        for (const rawCall of response.toolCalls) {
+          const validation = this.toolCallValidator.validate(rawCall, this.tools, this.name, this.securityContext.allowedTools);
 
-          if (!tool) {
-            console.log(`   ⚠️  Tool not found: ${call.name}`);
+          if (!validation.valid) {
+            console.log(`   🚫 Rejected tool call "${rawCall?.name}": ${validation.reason}`);
+            await this.emitEvent('security:invalid_tool_call', { toolName: rawCall?.name, reason: validation.reason });
+            await this.auditLog?.record({ beeName: this.name, type: 'invalid_tool_call', detail: validation.reason });
+            messages.push({ role: 'user', content: `Tool call rejected: ${validation.reason}` });
             continue;
           }
 
-          try {
-            const result = await tool.execute(call.params, toolContext);
+          const { toolName, args } = validation.call;
+          // Guaranteed present: ToolCallValidator only returns valid:true for a name found in this.tools.
+          const tool = this.tools.find(t => t.name === toolName)!;
 
-            console.log(`   → ${tool.name}(${JSON.stringify(call.params).substring(0, 40)})`);
+          try {
+            const result = await tool.execute(args, toolContext);
+
+            console.log(`   → ${tool.name}(${JSON.stringify(args).substring(0, 40)})`);
             console.log(`   ← ${result.substring(0, 60)}`);
 
-            toolCalls.push({ toolName: tool.name, params: call.params, result });
+            toolCalls.push({ toolName: tool.name, params: args, result });
 
             messages.push({
               role: 'user',
               content: `Tool ${tool.name} returned: ${result}`
             });
           } catch (error) {
-            console.error(`   ❌ Tool execution error: ${(error as Error).message}`);
+            const message = (error as Error).message;
+            console.error(`   ❌ Tool execution error: ${message}`);
+            messages.push({ role: 'user', content: `Tool ${tool.name} failed: ${message}` });
           }
         }
       } catch (error) {
@@ -403,7 +421,7 @@ export class Bee {
   private async callWithRetry(
     messages: Message[],
     delayMs: number = this.config.recommendedDelayMs
-  ): Promise<{ content: string; toolCalls?: { name: string; params: any }[] }> {
+  ): ReturnType<LLMAdapter['complete']> {
     try {
       return await withTimeout(
         this.llm.complete(messages, this.tools),
