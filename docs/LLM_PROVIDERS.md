@@ -28,8 +28,53 @@ const manager = new BeeManager({ llmProvider: 'openai' }); // reads OPENAI_API_K
 The legacy positional form still works and is unaffected by any of this:
 
 ```ts
-const manager = new BeeManager('gemini-1.5-flash', { apiKey: '...' });
+const manager = new BeeManager('gemini-flash-2.0', { apiKey: '...' });
 ```
+
+## Supported models by provider
+
+`BeeConfig` (`src/bee/BeeConfig.ts`) keeps the per-model rate limits, delays
+and token limits. A model that isn't listed still works - it just falls back
+to conservative defaults (10 req/min, 5s delay) until you register real limits
+via `beeManager.updateModelLimits(...)`.
+
+### Google Gemini
+
+**Current models** (2026-08):
+
+| Model                      | Notes                                              |
+|----------------------------|----------------------------------------------------|
+| `gemini-flash-2.0`         | Latest, fastest, largest free quota (**default**)  |
+| `gemini-flash-lite-latest` | Lite variant, moderate quota                       |
+| `gemini-3.6-flash`         | Smaller, good for simple/high-volume tasks         |
+| `gemini-2.0-pro`           | Most capable, smaller quota                        |
+
+**Legacy models** (registered but deprecated - retired from Google's API,
+calls will fail with 404):
+
+- `gemini-1.5-flash`
+- `gemini-1.5-pro`
+
+`getModelLimits()` prints a one-line deprecation warning when a deprecated
+model is used. Migrate to `gemini-flash-2.0` (or another current model above).
+
+### OpenAI
+
+- `gpt-4o` — most capable
+- `gpt-4o-mini` — cost-effective, the registry default
+- `gpt-4-turbo` — older, still available
+
+### Anthropic
+
+- `claude-3-5-sonnet-20241022` — the registry default
+- `claude-3-opus-20250219` — most capable (higher cost)
+- `claude-3-haiku-20250307` — lightweight
+
+### Ollama (local)
+
+- `llama3.1` — the registry default, real tool-calling support
+- `mistral-nemo`, `qwen2.5` — also tool-calling-capable
+- other local models run but answer in plain text instead of calling tools
 
 ### Gemini
 

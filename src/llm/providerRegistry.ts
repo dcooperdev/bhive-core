@@ -19,7 +19,7 @@ export interface ProviderDescriptor {
 export const PROVIDER_REGISTRY: Record<LLMProviderName, ProviderDescriptor> = {
   gemini: {
     name: 'gemini',
-    defaultModel: 'gemini-1.5-flash',
+    defaultModel: 'gemini-flash-2.0',
     envVar: 'GOOGLE_API_KEY',
     toolCalling: 'full',
     create: (apiKey, model) => new GeminiAdapter(apiKey, model)

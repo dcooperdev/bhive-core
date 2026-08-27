@@ -171,6 +171,21 @@ const manager = new BeeManager({
 
 See [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for detailed setup for each provider.
 
+### Known issues & limitations
+
+**Gemini model deprecation**: `gemini-1.5-flash` and `gemini-1.5-pro` have
+been retired by Google and will fail with a 404. They're still in the model
+registry (marked deprecated) for backward compatibility, but new code should
+use a current model:
+
+- `gemini-flash-2.0` (recommended, the new default)
+- `gemini-flash-lite-latest`
+- `gemini-3.6-flash`
+
+A valid model that simply isn't in the registry yet still works — it falls
+back to conservative rate limits with no warning. See
+[docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for the full list.
+
 ## Architecture
 See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on, [docs/DELEGATION.md](./docs/DELEGATION.md) / [docs/TRUST.md](./docs/TRUST.md) for agent-to-agent delegation, and [docs/SECURITY.md](./docs/SECURITY.md) for the secure communication protocol.
 

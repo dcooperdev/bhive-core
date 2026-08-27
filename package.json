@@ -1,6 +1,6 @@
 {
   "name": "@bhive-ai/core",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Multi-Agent AI Framework with Provider-Agnostic Tool-Calling",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

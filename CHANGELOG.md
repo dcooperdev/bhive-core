@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.1 - Provider Registry Update (Aug 27, 2026)
+
+### 🔧 Fixes
+- Add current Gemini models to the model registry (`gemini-flash-2.0`, `gemini-flash-lite-latest`, `gemini-3.6-flash`, `gemini-2.0-pro`)
+- Change the default Gemini model from `gemini-1.5-flash` to `gemini-flash-2.0`
+- Mark retired Gemini models (`gemini-1.5-flash`, `gemini-1.5-pro`) as `deprecated` in the registry; `getModelLimits()` now warns when one is used
+- Remove the "Unknown model, using conservative defaults" warning for models that simply aren't registered yet (custom or newer provider variants) — conservative defaults are still applied, just silently
+
+### 📚 Documentation
+- Add a "Supported models by provider" section to `docs/LLM_PROVIDERS.md` with current and deprecated Gemini models
+- Add a "Known issues & limitations" note on Gemini model deprecation to the README
+
+### ✅ Tests
+- Add `tests/bee/providerRegistry.test.ts` covering current model registration, deprecation marking, and silent fallback for unregistered models
+
 ## v0.5.0 - Provider-Agnostic Tool-Calling (Aug 26, 2026)
 
 ### ✨ Features
