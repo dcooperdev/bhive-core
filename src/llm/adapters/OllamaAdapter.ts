@@ -19,8 +19,10 @@ export class OllamaAdapter extends BaseLLMAdapter {
   readonly name = 'ollama';
   private readonly baseURL: string;
 
-  constructor(model = 'llama3.1', baseURL?: string) {
-    super(model);
+  constructor(model = 'llama3.1', baseURL?: string, timeout?: number) {
+    // Local models on modest hardware are routinely slower than a hosted API,
+    // so Ollama's fallback timeout is 120s rather than the shared 60s default.
+    super(model, { envVar: 'OLLAMA_TIMEOUT', timeout, fallbackMs: 120_000 });
     this.baseURL = baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
   }
 
@@ -36,7 +38,7 @@ export class OllamaAdapter extends BaseLLMAdapter {
     }
 
     try {
-      const response = await axios.post(`${this.baseURL}/api/chat`, body, { timeout: 60_000 });
+      const response = await axios.post(`${this.baseURL}/api/chat`, body, { timeout: this.timeout });
 
       const toolCalls = ToolCallingParser.parseFunctionCalls(response.data, 'ollama');
       const content = response.data?.message?.content ?? '';

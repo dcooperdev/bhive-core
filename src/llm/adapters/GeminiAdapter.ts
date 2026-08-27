@@ -16,8 +16,8 @@ export class GeminiAdapter extends BaseLLMAdapter {
   private apiKey: string;
   private readonly baseURL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-  constructor(apiKey?: string, model = 'gemini-1.5-flash') {
-    super(model);
+  constructor(apiKey?: string, model = 'gemini-flash-2.0', timeout?: number) {
+    super(model, { envVar: 'GEMINI_TIMEOUT', timeout });
     this.apiKey = apiKey || process.env.GOOGLE_API_KEY || '';
     if (!this.apiKey) {
       throw new Error('GOOGLE_API_KEY not set. Add it to your .env file.\nGet a free key at https://aistudio.google.com/app/apikey');
@@ -36,7 +36,7 @@ export class GeminiAdapter extends BaseLLMAdapter {
       const response = await axios.post(`${this.baseURL}/${this.model}:generateContent`, body, {
         headers: { 'Content-Type': 'application/json' },
         params: { key: this.apiKey },
-        timeout: 30_000
+        timeout: this.timeout
       });
 
       const toolCalls = ToolCallingParser.parseFunctionCalls(response.data, 'gemini');

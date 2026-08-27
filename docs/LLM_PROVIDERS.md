@@ -111,6 +111,41 @@ Pick a model that actually supports Ollama's `tools` field if you need real
 tool-calling - check with `ollama show <model>` (look for a `Tools` capability
 in the output). A model without it will still run, it just won't call tools.
 
+## Timeout configuration
+
+Every LLM call has a per-request timeout, enforced at two layers that are kept
+in sync: the adapter's HTTP request (axios) and the Bee-level wrapper in
+`Bee.callWithRetry()`. Defaults: **60s** for the hosted providers, **120s** for
+Ollama (local models are slower).
+
+Resolution order, most specific wins:
+
+1. an explicit argument — `new BeeManager({ timeout })` or `new GeminiAdapter(key, model, timeout)`
+2. the provider-specific env var — `GEMINI_TIMEOUT`, `OPENAI_TIMEOUT`, `ANTHROPIC_TIMEOUT`, `OLLAMA_TIMEOUT`
+3. the generic `BEE_TIMEOUT` env var
+4. the built-in default (60s / 120s)
+
+```bash
+# env vars are milliseconds
+GEMINI_TIMEOUT=120000 npm run analyze
+BEE_TIMEOUT=90000      # applies to whichever provider is active
+```
+
+```ts
+// via BeeManager - sets both the adapter HTTP timeout and the Bee wrapper
+const manager = new BeeManager({ llmProvider: 'gemini', timeout: 90_000 });
+
+// or directly on an adapter you build yourself
+const adapter = new GeminiAdapter(apiKey, 'gemini-flash-2.0', 90_000);
+```
+
+### Troubleshooting timeouts
+
+- **"Timeout after 30000ms"** — you're on `@bhive-ai/core` < 0.5.2. Upgrade, or set `BEE_TIMEOUT`.
+- **"Timeout after 60000ms" / "timeout of 60000ms exceeded"** on large jobs — raise `GEMINI_TIMEOUT` (e.g. `120000`).
+- **Ollama** on modest hardware — `OLLAMA_TIMEOUT=180000` is not unreasonable.
+- A pre-built `llmAdapter` passed to `BeeManager` keeps its own HTTP timeout; `BeeManager({ timeout })` only widens the Bee wrapper for it.
+
 ## Adding your own provider
 
 Implement `LLMAdapter` (`src/providers/LLMAdapter.ts`):

@@ -186,6 +186,29 @@ A valid model that simply isn't in the registry yet still works — it falls
 back to conservative rate limits with no warning. See
 [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for the full list.
 
+### Troubleshooting
+
+**Timeout errors** (`Timeout after 30000ms` / `timeout of 60000ms exceeded`):
+
+1. On `Timeout after 30000ms` — upgrade to `@bhive-ai/core@^0.5.2` (default is now 60s).
+2. Raise the timeout via env var (milliseconds):
+   ```bash
+   GEMINI_TIMEOUT=120000 npm run analyze
+   ```
+3. Or in code:
+   ```typescript
+   const manager = new BeeManager({ llmProvider: 'gemini', timeout: 120_000 });
+   ```
+
+Typical values: Gemini/OpenAI/Anthropic 60–90s, Ollama 120–180s (hardware-dependent).
+Full resolution order and per-provider env vars (`GEMINI_TIMEOUT`, `OPENAI_TIMEOUT`,
+`ANTHROPIC_TIMEOUT`, `OLLAMA_TIMEOUT`, `BEE_TIMEOUT`) are in
+[docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md#timeout-configuration).
+
+**401 Unauthorized from Gemini**: your `GOOGLE_API_KEY` is missing/invalid for
+the AI Studio endpoint. Keys are `AIza…` format — get one at
+https://aistudio.google.com/app/apikey. A timeout change will not fix a 401.
+
 ## Architecture
 See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on, [docs/DELEGATION.md](./docs/DELEGATION.md) / [docs/TRUST.md](./docs/TRUST.md) for agent-to-agent delegation, and [docs/SECURITY.md](./docs/SECURITY.md) for the secure communication protocol.
 

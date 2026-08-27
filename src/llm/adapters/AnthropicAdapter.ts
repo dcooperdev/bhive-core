@@ -14,8 +14,8 @@ export class AnthropicAdapter extends BaseLLMAdapter {
   private apiKey: string;
   private readonly baseURL = 'https://api.anthropic.com/v1';
 
-  constructor(apiKey?: string, model = 'claude-3-5-sonnet-20241022') {
-    super(model);
+  constructor(apiKey?: string, model = 'claude-3-5-sonnet-20241022', timeout?: number) {
+    super(model, { envVar: 'ANTHROPIC_TIMEOUT', timeout });
     this.apiKey = apiKey || process.env.ANTHROPIC_API_KEY || '';
     if (!this.apiKey) {
       throw new Error('ANTHROPIC_API_KEY not set. Add it to your .env file.\nGet a key at https://console.anthropic.com/settings/keys');
@@ -39,7 +39,7 @@ export class AnthropicAdapter extends BaseLLMAdapter {
           'x-api-key': this.apiKey,
           'anthropic-version': ANTHROPIC_VERSION
         },
-        timeout: 30_000
+        timeout: this.timeout
       });
 
       const toolCalls = ToolCallingParser.parseFunctionCalls(response.data, 'anthropic');

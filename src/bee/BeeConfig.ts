@@ -11,13 +11,16 @@ export interface ModelLimits {
   deprecated?: boolean;
 }
 
+/** Default per-request timeout (ms) for models that don't specify their own. */
+export const DEFAULT_MODEL_TIMEOUT_MS = 60000;
+
 const DEFAULT_LIMITS: ModelLimits = {
   name: 'Unknown Model',
   requestsPerMinute: 10,
   recommendedDelayMs: 5000,
   maxTokensPerRequest: 2048,
   maxTokensPerMinute: 100000,
-  timeout: 30000,
+  timeout: DEFAULT_MODEL_TIMEOUT_MS,
   estimatedCostPer1kTokens: { input: 0, output: 0 },
   recommendedBatchSize: 1
 };
@@ -29,10 +32,22 @@ const DEFAULT_LIMITS: ModelLimits = {
  * timeouts and token limits. BeeManager/Bee call getModelLimits() on
  * init so no manual rate-limit configuration is ever required.
  */
+export interface BeeConfigOptions {
+  /**
+   * Overrides every registered model's `timeout` (and the unknown-model
+   * fallback). Set by BeeManager from its `timeout` option / the `BEE_TIMEOUT`
+   * env var so the Bee-level request wrapper matches the adapter's HTTP timeout.
+   */
+  timeoutMs?: number;
+}
+
 export class BeeConfig {
   private registry: Map<string, ModelLimits>;
+  private readonly timeoutOverrideMs?: number;
 
-  constructor() {
+  constructor(options: BeeConfigOptions = {}) {
+    this.timeoutOverrideMs =
+      typeof options.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : undefined;
     this.registry = new Map();
 
     // --- Google Gemini: current/active models (as of Aug 2026) ---
@@ -43,7 +58,7 @@ export class BeeConfig {
       recommendedDelayMs: 100,
       maxTokensPerRequest: 8000,
       maxTokensPerMinute: 4000000,
-      timeout: 30000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0, output: 0 },
       recommendedBatchSize: 10
     });
@@ -54,7 +69,7 @@ export class BeeConfig {
       recommendedDelayMs: 200,
       maxTokensPerRequest: 4000,
       maxTokensPerMinute: 2000000,
-      timeout: 30000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0, output: 0 },
       recommendedBatchSize: 8
     });
@@ -65,7 +80,7 @@ export class BeeConfig {
       recommendedDelayMs: 300,
       maxTokensPerRequest: 6000,
       maxTokensPerMinute: 2000000,
-      timeout: 30000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0, output: 0 },
       recommendedBatchSize: 6
     });
@@ -114,7 +129,7 @@ export class BeeConfig {
       recommendedDelayMs: 200,
       maxTokensPerRequest: 32000,
       maxTokensPerMinute: 6000000,
-      timeout: 20000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0, output: 0 },
       recommendedBatchSize: 20
     });
@@ -125,7 +140,7 @@ export class BeeConfig {
       recommendedDelayMs: 100,
       maxTokensPerRequest: 16000,
       maxTokensPerMinute: 10000000,
-      timeout: 30000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0.00015, output: 0.0006 },
       recommendedBatchSize: 15
     });
@@ -136,7 +151,7 @@ export class BeeConfig {
       recommendedDelayMs: 100,
       maxTokensPerRequest: 16000,
       maxTokensPerMinute: 8000000,
-      timeout: 30000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0.0025, output: 0.01 },
       recommendedBatchSize: 10
     });
@@ -160,7 +175,7 @@ export class BeeConfig {
       recommendedDelayMs: 100,
       maxTokensPerRequest: 8000,
       maxTokensPerMinute: 4000000,
-      timeout: 30000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0.003, output: 0.015 },
       recommendedBatchSize: 10
     });
@@ -182,7 +197,7 @@ export class BeeConfig {
       recommendedDelayMs: 50,
       maxTokensPerRequest: 4096,
       maxTokensPerMinute: 10000000,
-      timeout: 30000,
+      timeout: 60000,
       estimatedCostPer1kTokens: { input: 0.00025, output: 0.00125 },
       recommendedBatchSize: 15
     });
@@ -201,6 +216,12 @@ export class BeeConfig {
         recommendedBatchSize: 2
       });
     }
+
+    if (this.timeoutOverrideMs) {
+      for (const limits of this.registry.values()) {
+        limits.timeout = this.timeoutOverrideMs;
+      }
+    }
   }
 
   /**
@@ -216,7 +237,7 @@ export class BeeConfig {
     const limits = this.registry.get(modelName);
 
     if (!limits) {
-      return { ...DEFAULT_LIMITS };
+      return { ...DEFAULT_LIMITS, ...(this.timeoutOverrideMs ? { timeout: this.timeoutOverrideMs } : {}) };
     }
 
     if (limits.deprecated) {

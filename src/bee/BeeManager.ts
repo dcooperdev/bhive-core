@@ -33,6 +33,14 @@ export interface BeeManagerOptions {
   llmProvider?: LLMProviderName;
   /** Model name to use with the auto-constructed adapter. Defaults to that provider's registry default. */
   model?: string;
+  /**
+   * Per-request timeout in ms applied to both the auto-constructed LLM adapter
+   * (its HTTP call) and every Bee's request wrapper. Defaults to the
+   * `BEE_TIMEOUT` env var, then each layer's own default (60s; 120s for Ollama).
+   * A pre-built `llmAdapter` keeps its own HTTP timeout (set that on the adapter
+   * directly), but the Bee-level wrapper still uses this value.
+   */
+  timeout?: number;
   storageProvider?: StorageProvider;
   contextProvider?: ContextProvider;
   eventPublisher?: EventPublisher;
@@ -70,6 +78,13 @@ export interface BeeStats {
   delayMs: number;
   rateLimitPerMin: number;
   runs: number;
+}
+
+/** Explicit option wins; otherwise fall back to the BEE_TIMEOUT env var; else undefined (each layer uses its own default). */
+function resolveManagerTimeout(explicit?: number): number | undefined {
+  if (typeof explicit === 'number' && explicit > 0) return explicit;
+  const fromEnv = parseInt(process.env.BEE_TIMEOUT ?? '', 10);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : undefined;
 }
 
 function resolveProvider(explicit?: LLMProviderName): LLMProviderName {
@@ -128,9 +143,11 @@ export class BeeManager {
     const defaultModel =
       typeof modelOrOptions === 'string' ? modelOrOptions : options.model ?? PROVIDER_REGISTRY[provider].defaultModel;
 
+    const resolvedTimeout = resolveManagerTimeout(options.timeout);
+
     this.defaultModel = defaultModel;
-    this.beeConfig = new BeeConfig();
-    this.llm = options.llmAdapter || createLLMAdapter(provider, options.apiKey, defaultModel);
+    this.beeConfig = new BeeConfig(resolvedTimeout ? { timeoutMs: resolvedTimeout } : {});
+    this.llm = options.llmAdapter || createLLMAdapter(provider, options.apiKey, defaultModel, resolvedTimeout);
     this.storageProvider = options.storageProvider;
     this.contextProvider = options.contextProvider;
     this.eventPublisher = options.eventPublisher;

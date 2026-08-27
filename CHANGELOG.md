@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.5.2 - Configurable Timeouts (Aug 27, 2026)
+
+### 🐛 Fixes
+- Raise the default per-request timeout from 30s to 60s (120s for Ollama) - fixes "Timeout after 30000ms" in multi-step agent runs on slow networks / large payloads
+- `GeminiAdapter`, `OpenAIAdapter`, `AnthropicAdapter`, `OllamaAdapter` all updated; both timeout layers (adapter HTTP call + `Bee.callWithRetry()` wrapper) now move together
+- `GeminiAdapter`'s own default model updated `gemini-1.5-flash` → `gemini-flash-2.0` to match the registry default from v0.5.1
+
+### ⚙️ Configuration
+- Timeout is now configurable, most-specific wins:
+  1. explicit arg: `new BeeManager({ timeout: 90000 })` or `new GeminiAdapter(key, model, 90000)`
+  2. provider env var: `GEMINI_TIMEOUT`, `OPENAI_TIMEOUT`, `ANTHROPIC_TIMEOUT`, `OLLAMA_TIMEOUT`
+  3. generic env var: `BEE_TIMEOUT`
+  4. built-in default (60s / 120s)
+- `BeeConfig` accepts `{ timeoutMs }` to override every model's Bee-level timeout
+- `LLMAdapter` interface documents an optional `timeout` field
+
+### 📚 Documentation
+- New "Timeout configuration" + troubleshooting section in docs/LLM_PROVIDERS.md
+- Timeout env vars documented in .env.example
+- README troubleshooting section
+
+### ✅ Tests
+- `tests/llm/adapters/timeout.test.ts` - resolution precedence + per-adapter wiring
+- `BeeManager` timeout-propagation tests (option, `BEE_TIMEOUT`, pre-built adapter)
+
 ## v0.5.1 - Provider Registry Update (Aug 27, 2026)
 
 ### 🔧 Fixes

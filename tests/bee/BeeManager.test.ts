@@ -34,6 +34,39 @@ describe('BeeManager', () => {
     });
   });
 
+  describe('timeout configuration', () => {
+    const TIMEOUT_ENV = ['BEE_TIMEOUT', 'GEMINI_TIMEOUT'];
+    afterEach(() => TIMEOUT_ENV.forEach(k => delete process.env[k]));
+
+    it('defaults the auto-built adapter to 60s', () => {
+      const manager = new BeeManager({ llmProvider: 'gemini', apiKey: 'k' });
+      expect(manager.getLLM().timeout).toBe(60_000);
+    });
+
+    it('passes the `timeout` option to both the adapter and every Bee', () => {
+      const manager = new BeeManager({ llmProvider: 'gemini', apiKey: 'k', timeout: 90_000 });
+      expect(manager.getLLM().timeout).toBe(90_000);
+
+      manager.createBee({ name: 'b', prompt: 'p', tools: [] });
+      expect(manager.getBee('b')!.getConfig().timeout).toBe(90_000);
+    });
+
+    it('falls back to the BEE_TIMEOUT env var', () => {
+      process.env.BEE_TIMEOUT = '120000';
+      const manager = new BeeManager({ llmProvider: 'gemini', apiKey: 'k' });
+      expect(manager.getLLM().timeout).toBe(120_000);
+
+      manager.createBee({ name: 'b', prompt: 'p', tools: [] });
+      expect(manager.getBee('b')!.getConfig().timeout).toBe(120_000);
+    });
+
+    it('leaves a pre-built llmAdapter untouched', () => {
+      const mockLLM = new MockLLM();
+      const manager = new BeeManager({ llmAdapter: mockLLM, timeout: 90_000 });
+      expect(manager.getLLM()).toBe(mockLLM);
+    });
+  });
+
   describe('createBee', () => {
     it('should create and register bee', () => {
       const def: BeeDefinition = {

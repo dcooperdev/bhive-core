@@ -45,6 +45,15 @@ export type LLMCompletionResult = LLMResponse;
 export interface LLMAdapter {
   /** Identifies the backend, e.g. 'gemini', 'openai', 'anthropic', 'ollama'. */
   readonly name: string;
+  /**
+   * Per-request HTTP timeout in ms for the built-in adapters. Resolved once at
+   * construction from (most specific first): an explicit constructor argument,
+   * a provider-specific env var (`GEMINI_TIMEOUT`, `OPENAI_TIMEOUT`,
+   * `ANTHROPIC_TIMEOUT`, `OLLAMA_TIMEOUT`), the generic `BEE_TIMEOUT`, then the
+   * adapter default (60s; 120s for Ollama). Optional - a custom adapter need
+   * not expose it.
+   */
+  readonly timeout?: number;
   complete(messages: Message[], tools?: Tool[]): Promise<LLMResponse>;
   getTokens(): number;
   getCallCount(): number;

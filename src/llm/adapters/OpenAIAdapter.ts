@@ -11,8 +11,8 @@ export class OpenAIAdapter extends BaseLLMAdapter {
   private apiKey: string;
   private readonly baseURL: string;
 
-  constructor(apiKey?: string, model = 'gpt-4o-mini', baseURL = 'https://api.openai.com/v1') {
-    super(model);
+  constructor(apiKey?: string, model = 'gpt-4o-mini', baseURL = 'https://api.openai.com/v1', timeout?: number) {
+    super(model, { envVar: 'OPENAI_TIMEOUT', timeout });
     this.apiKey = apiKey || process.env.OPENAI_API_KEY || '';
     this.baseURL = baseURL;
     if (!this.apiKey) {
@@ -33,7 +33,7 @@ export class OpenAIAdapter extends BaseLLMAdapter {
     try {
       const response = await axios.post(`${this.baseURL}/chat/completions`, body, {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
-        timeout: 30_000
+        timeout: this.timeout
       });
 
       const toolCalls = ToolCallingParser.parseFunctionCalls(response.data, 'openai');
