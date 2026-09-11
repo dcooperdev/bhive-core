@@ -24,7 +24,7 @@ Start building for production.
 ### 2. Setup .env
 `cp .env.example .env`
 
-# Edit .env and add your Google (Gemini) API key
+# Edit .env and add your LLM provider API key
 
 ### 3. Build
 `npm run build`
@@ -37,9 +37,9 @@ Start building for production.
 ```typescript
 import { BeeManager } from '@bhive/core';
 
-// No providers given: BeeManager falls back to a GeminiAdapter and a
-// plain in-memory queue, no configuration required.
-const beeManager = new BeeManager('gemini-1.5-flash');
+// No providers given: BeeManager falls back to your configured LLM
+// and a plain in-memory queue, no configuration required.
+const beeManager = new BeeManager('your-model-name');
 
 beeManager.createBee({
   name: 'classifier',
@@ -50,7 +50,7 @@ beeManager.createBee({
 await beeManager.executeTask('Process email: ...', ['classifier']);
 
 // Plan upgraded? Reconfigure every Bee in memory, no restart of the process needed.
-beeManager.restart('gemini-1.5-pro');
+beeManager.restart('your-upgraded-model-name');
 ```
 
 ### Injecting providers
@@ -58,8 +58,8 @@ beeManager.restart('gemini-1.5-pro');
 ```typescript
 import { BeeManager, InMemoryStorage, InMemoryEventBus } from '@bhive/core';
 
-const beeManager = new BeeManager('gemini-1.5-flash', {
-  apiKey: process.env.GOOGLE_API_KEY,
+const beeManager = new BeeManager('your-model-name', {
+  apiKey: process.env.LLM_API_KEY,
   storageProvider: new InMemoryStorage(),   // swap for a RedisStorage, MongoStorage, ...
   eventPublisher: new InMemoryEventBus()    // swap for a KafkaEventBus, WebSocketEventBus, ...
 });
@@ -86,7 +86,7 @@ let the LLM decide when to use it:
 ```typescript
 import { BeeManager, createDelegationTool } from '@bhive/core';
 
-const beeManager = new BeeManager('gemini-1.5-flash');
+const beeManager = new BeeManager('your-model-name');
 
 beeManager.createBee({
   name: 'classifier',
@@ -119,8 +119,8 @@ unconditionally, with permissive defaults so nothing changes until you
 opt in. Turn on signing and end-to-end encryption per `BeeManager`:
 
 ```typescript
-const beeManager = new BeeManager('gemini-1.5-flash', {
-  apiKey: process.env.GOOGLE_API_KEY,
+const beeManager = new BeeManager('your-model-name', {
+  apiKey: process.env.LLM_API_KEY,
   securityOptions: { enableSigning: true, enableEncryption: true, trustLevel: 'careful' }
 });
 ```
@@ -148,7 +148,7 @@ actually get caught.
 - Token/cost tracking and a `printSummary()` / `getBeeStats()` report
 - In-memory `restart()` to reconfigure all Bees after a plan change
 
-## LLM Providers
+## Your LLM Provider
 
 Bhive supports multiple LLM providers out of the box:
 
@@ -173,14 +173,9 @@ See [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for detailed setup for each p
 
 ### Known issues & limitations
 
-**Gemini model deprecation**: `gemini-1.5-flash` and `gemini-1.5-pro` have
-been retired by Google and will fail with a 404. They're still in the model
-registry (marked deprecated) for backward compatibility, but new code should
-use a current model:
-
-- `gemini-flash-2.0` (recommended, the new default)
-- `gemini-flash-lite-latest`
-- `gemini-3.6-flash`
+**Model deprecation**: Check your LLM provider's documentation for deprecated
+models. Models marked deprecated in the registry will still work for backward
+compatibility, but new code should migrate to current models.
 
 A valid model that simply isn't in the registry yet still works — it falls
 back to conservative rate limits with no warning. See
@@ -193,21 +188,21 @@ back to conservative rate limits with no warning. See
 1. On `Timeout after 30000ms` — upgrade to `@bhive-ai/core@^0.5.2` (default is now 60s).
 2. Raise the timeout via env var (milliseconds):
    ```bash
-   GEMINI_TIMEOUT=120000 npm run analyze
+   BEE_TIMEOUT=120000 npm run analyze
    ```
 3. Or in code:
    ```typescript
-   const manager = new BeeManager({ llmProvider: 'gemini', timeout: 120_000 });
+   const manager = new BeeManager({ timeout: 120_000 });
    ```
 
-Typical values: Gemini/OpenAI/Anthropic 60–90s, Ollama 120–180s (hardware-dependent).
+Typical values: Most LLMs 60–90s, Local/Self-hosted 120–180s (hardware-dependent).
 Full resolution order and per-provider env vars (`GEMINI_TIMEOUT`, `OPENAI_TIMEOUT`,
 `ANTHROPIC_TIMEOUT`, `OLLAMA_TIMEOUT`, `BEE_TIMEOUT`) are in
 [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md#timeout-configuration).
 
-**401 Unauthorized from Gemini**: your `GOOGLE_API_KEY` is missing/invalid for
-the AI Studio endpoint. Keys are `AIza…` format — get one at
-https://aistudio.google.com/app/apikey. A timeout change will not fix a 401.
+**Authorization errors**: your `LLM_API_KEY` is missing or invalid for
+your LLM provider's endpoint. Check your provider's documentation for the correct
+API key format and how to obtain one. A timeout change will not fix an authorization error.
 
 ## Architecture
 See [HIVE_SPEC.md](./HIVE_SPEC.md) for the original design, [HIVE_TEST_SPEC.md](./HIVE_TEST_SPEC.md) for the test strategy, [docs/PROVIDERS.md](./docs/PROVIDERS.md) for the Provider Pattern this version is built on, [docs/DELEGATION.md](./docs/DELEGATION.md) / [docs/TRUST.md](./docs/TRUST.md) for agent-to-agent delegation, and [docs/SECURITY.md](./docs/SECURITY.md) for the secure communication protocol.
