@@ -1,10 +1,18 @@
 {
   "name": "@bhive-ai/core",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Multi-Agent AI Framework with Provider-Agnostic Tool-Calling",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": ["dist"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dcooperdev/bhive-core.git"
+  },
+  "homepage": "https://github.com/dcooperdev/bhive-core#readme",
+  "bugs": {
+    "url": "https://github.com/dcooperdev/bhive-core/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
