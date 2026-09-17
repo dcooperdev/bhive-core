@@ -9,7 +9,7 @@ and the primitive-level tests referenced below - run them yourself with
 Every snippet below assumes:
 
 ```typescript
-import { BeeManager, MessageEncryption, PromptInjectionDetector } from '@bhive/core';
+import { BeeManager, MessageEncryption, PromptInjectionDetector } from '@bhive-ai/core';
 
 const beeManager = new BeeManager('gemini-1.5-flash', {
   apiKey: process.env.GOOGLE_API_KEY,

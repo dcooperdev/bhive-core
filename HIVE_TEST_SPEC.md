@@ -37,7 +37,7 @@ HiveJS/
 
 ```json
 {
-  "name": "@bhive/core",
+  "name": "@bhive-ai/core",
   "version": "0.1.0",
   "description": "Hive - Multi-Agent AI Framework with Auto-Configurable Bees",
   "main": "dist/index.js",
