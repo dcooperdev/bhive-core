@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit: dcooperdev/bhive-core</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f4f5f7; color: #1a1a2e; line-height: 1.6;
+  }
+  .card {
+    max-width: 860px; margin: 0 auto; background: #fff;
+    border-radius: 12px; overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  }
+  .header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff; padding: 40px; text-align: center;
+  }
+  .header h1 { font-size: 1.8em; margin: 0 0 8px; word-break: break-all; }
+  .header p { margin: 0; opacity: 0.92; }
+  .meta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 20px; }
+  .meta span { background: rgba(255, 255, 255, 0.2); padding: 6px 14px; border-radius: 6px; font-size: 0.9em; }
+  .risk-badge { display: inline-block; margin-top: 18px; padding: 8px 18px; border-radius: 999px; font-weight: 700; letter-spacing: .02em; }
+  .risk-critical { background: #7f1d1d; color: #fff; }
+  .risk-high { background: #b91c1c; color: #fff; }
+  .risk-moderate { background: #b45309; color: #fff; }
+  .risk-low { background: #15803d; color: #fff; }
+  .risk-none { background: #166534; color: #fff; }
+  .content { padding: 40px; }
+  section { margin-bottom: 32px; }
+  section:last-child { margin-bottom: 0; }
+  h2 { font-size: 1.15em; margin: 0 0 12px; border-bottom: 2px solid #eee; padding-bottom: 6px; }
+  .score-track { background: #eee; border-radius: 999px; height: 14px; overflow: hidden; }
+  .score-fill { height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); }
+  .score-label { font-weight: 600; margin-top: 6px; }
+  .qb-block { margin-top: 14px; }
+  .qb-heading { font-weight: 600; margin: 0 0 6px; }
+  ul.qb-list { list-style: none; margin: 0; padding: 0; }
+  ul.qb-list li { padding: 3px 0; font-size: 0.92em; }
+  .qb-points { display: inline-block; min-width: 34px; font-weight: 700; font-family: monospace; }
+  .qb-points.pos { color: #16a34a; }
+  .qb-points.neg { color: #dc2626; }
+  .qb-points.zero { color: #9ca3af; }
+  ul.chips { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  ul.chips li { background: #eef0ff; color: #4338ca; padding: 4px 12px; border-radius: 999px; font-size: 0.9em; }
+  ol { margin: 0; padding-left: 20px; }
+  ol li { margin-bottom: 6px; }
+  .empty { color: #888; font-style: italic; margin: 0; }
+  .note { color: #666; font-size: 0.9em; margin: 0 0 10px; }
+  footer { text-align: center; padding: 20px; color: #999; font-size: 0.85em; }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { color: #555; font-weight: 600; }
+  code { background: #f0f0f4; padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+
+  .alert { padding: 12px 15px; border-radius: 6px; margin: 0 0 12px; }
+  .alert-danger { background: #fee2e2; border-left: 4px solid #dc2626; color: #991b1b; }
+  .alert-success { background: #dcfce7; border-left: 4px solid #16a34a; color: #166534; }
+  .alert-muted { background: #f3f4f6; border-left: 4px solid #9ca3af; color: #4b5563; }
+
+  .sev { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.78em; font-weight: 700; text-transform: uppercase; }
+  .sev-critical { background: #7f1d1d; color: #fff; }
+  .sev-high { background: #dc2626; color: #fff; }
+  .sev-medium { background: #f59e0b; color: #1a1a2e; }
+  .sev-low { background: #10b981; color: #052e16; }
+  .tag { background: #e5e7eb; color: #374151; border-radius: 4px; padding: 0 5px; font-size: 0.75em; }
+
+  .issue { background: #f9fafb; border-left: 4px solid #fbbf24; padding: 12px 15px; margin: 10px 0; border-radius: 4px; }
+  .issue-critical { border-left-color: #7f1d1d; }
+  .issue-high { border-left-color: #dc2626; }
+  .issue-medium { border-left-color: #f59e0b; }
+  .issue-low { border-left-color: #10b981; }
+  .issue-detail { margin: 6px 0 4px; }
+  .issue-fix { margin: 0; color: #555; font-size: 0.92em; }
+
+  .ai-detection { background: #f3f4f6; padding: 15px; border-radius: 6px; }
+  .bar { display: flex; height: 26px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin-bottom: 10px; }
+  .bar .ai { background: #667eea; }
+  .bar .human { background: #10b981; }
+  .bar > div { color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .disclaimer { font-size: 0.85em; color: #6b7280; font-style: italic; margin: 8px 0; }
+
+  ul.compliance { list-style: none; padding: 0; margin: 0; }
+  .cc { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+  .cc-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; color: #fff; }
+  .cc-pass .cc-icon { background: #16a34a; }
+  .cc-warn .cc-icon { background: #f59e0b; }
+  .cc-fail .cc-icon { background: #dc2626; }
+  .cc-na .cc-icon { background: #9ca3af; }
+
+  @media (prefers-color-scheme: dark) {
+    body { background: #16161f; color: #e6e6ec; }
+    .card { background: #1f1f2b; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+    h2 { border-color: #33333f; }
+    .score-track { background: #33333f; }
+    ul.chips li { background: #2d2b4a; color: #b9b4ff; }
+    code { background: #33333f; }
+    th, td { border-color: #33333f; }
+    .note, .issue-fix { color: #9ca3af; }
+    .issue { background: #26263340; }
+    .alert-danger { background: #45161680; }
+    .alert-success { background: #0f2f1e80; }
+    .alert-muted { background: #2a2a35; }
+    .ai-detection { background: #2a2a35; }
+    .cc { border-color: #2a2a35; }
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>dcooperdev/bhive-core</h1>
+      <p>Multi-Agent AI Framework with Provider-Agnostic Tool-Calling</p>
+      <div class="risk-badge risk-none">No issues found</div>
+      <div class="meta">
+        <span>Adoption: 4.8/10</span>
+        <span>Complexity: medium</span>
+        <span>2026-09-17 02:49:48 UTC</span>
+      </div>
+    </div>
+    <div class="content">
+      
+      <section>
+        <h2>Adoption score</h2>
+        <div class="score-track"><div class="score-fill" style="width: 48%"></div></div>
+        <div class="score-label">4.8 / 10</div>
+        <p class="note">This score blends repo popularity/maturity signals with real audit findings; it is not a pure code-quality grade.</p>
+    <div class="qb-block">
+      <p class="qb-heading">Baseline (popularity &amp; maturity): <strong>5 / 10</strong></p>
+      <ul class="qb-list"><li><span class="qb-points pos">+3</span> README is substantial (&gt;2000 chars)</li><li><span class="qb-points pos">+1</span> package.json present</li><li><span class="qb-points zero">0</span> No GitHub stars yet</li><li><span class="qb-points pos">+1</span> Updated within the last 180 days</li></ul>
+    </div>
+    <div class="qb-block">
+      <p class="qb-heading">Penalties from this audit</p>
+      <ul class="qb-list"><li><span class="qb-points neg">-0.2</span> 1 dev dependency at least one major behind</li></ul>
+    </div>
+    <div class="alert alert-muted">Up to 5 of the 10 baseline points come from GitHub stars and forks. A small,
+      new, or private-turned-public repo can score low here even when security, dependencies, and code practices
+      all pass below — check those sections, not just this number.</div>
+      </section>
+      <section>
+        <h2>🔒 Security audit <small class="note">OSV.dev</small></h2>
+        <div class="alert alert-success">No known vulnerabilities across 10 dependencies (OSV.dev) ✓</div>
+      </section>
+      <section>
+        <h2>📦 Dependency freshness <small class="note">npm registry</small></h2>
+        <p>1 of 10 dependencies outdated (<strong>10%</strong>),
+      1 at least one major behind.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Package</th><th>Resolved → Latest</th><th>Behind</th><th>Age</th></tr></thead>
+      <tbody><tr>
+        <td>typescript <span class="tag">dev</span></td>
+        <td><code>6.0.3</code> → <code>7.0.2</code></td>
+        <td><span class="sev sev-medium">1 major</span></td>
+        <td>5 mo old</td>
+      </tr></tbody>
+    </table></div>
+      </section>
+      <section>
+        <h2>⚠️ Code practices</h2>
+        <p class="note">Practices score <strong>10 / 10</strong> · 6 source files inspected</p><div class="alert alert-success">No practice issues detected ✓</div>
+      </section>
+      <section>
+        <h2>🤖 AI-style heuristic <small class="note">experimental</small></h2>
+        <div class="ai-detection">
+      <div class="bar">
+        <div class="ai" style="width: 26%">AI-style 26%</div>
+        <div class="human" style="width: 74%">Human 74%</div>
+      </div>
+      <p class="note">Self-reported confidence: 52% · 6 files sampled</p>
+      <p class="disclaimer">Experimental style heuristic. It pattern-matches sampled source against traits common in machine-generated code; it is not an authorship determination and is easily wrong in both directions.</p>
+      <details><summary>3 style indicator(s)</summary><ul><li>No TODO/FIXME/HACK markers in any sampled file</li><li>No commented-out code blocks</li><li>Emoji in source (common in generated example code)</li></ul></details>
+    </div>
+      </section>
+      <section>
+        <h2>✅ Compliance checklist</h2>
+        <ul class="compliance"><li class="cc cc-pass"><span class="cc-icon">✓</span>
+        <span><strong>No known-vulnerable dependencies</strong><br><small>No OSV matches at resolved versions.</small></span></li><li class="cc cc-pass"><span class="cc-icon">✓</span>
+        <span><strong>Dependencies reasonably current</strong><br><small>10% behind latest.</small></span></li><li class="cc cc-pass"><span class="cc-icon">✓</span>
+        <span><strong>Automated tests present</strong><br><small>Test script or test files found.</small></span></li><li class="cc cc-pass"><span class="cc-icon">✓</span>
+        <span><strong>CI pipeline present</strong><br><small>CI config found.</small></span></li><li class="cc cc-pass"><span class="cc-icon">✓</span>
+        <span><strong>Dependency lockfile committed</strong><br><small>Lockfile present.</small></span></li><li class="cc cc-pass"><span class="cc-icon">✓</span>
+        <span><strong>No secrets committed to the repo</strong><br><small>No obvious secrets in sampled files.</small></span></li><li class="cc cc-pass"><span class="cc-icon">✓</span>
+        <span><strong>Automated dependency scanning</strong><br><small>Dependabot/Renovate/audit step detected.</small></span></li></ul>
+      </section>
+      <section>
+        <h2>Tech stack</h2>
+        <ul class="chips"><li>Anthropic API</li><li>Axios</li><li>ESLint</li><li>Jest</li><li>Kubernetes</li><li>Node.js</li><li>OpenAI API</li><li>Redis</li><li>TypeScript</li></ul>
+      </section>
+      <section>
+        <h2>Patterns</h2>
+        <ul class="chips"><li>Automated Testing</li><li>Linting / Static Analysis</li><li>Type-Safe Codebase</li></ul>
+      </section>
+      <section>
+        <h2>Recommendations</h2>
+        <ol><li>Update 1 dependency/dependencies that are at least one major version behind.</li></ol>
+      </section>
+    </div>
+    <footer>Generated by hive-lab/github-analyzer · vulnerability data from OSV.dev · version data from the npm registry</footer>
+  </div>
+</body>
+</html>
