@@ -4,6 +4,9 @@ module.exports = {
   roots: ['<rootDir>/tests'],
   setupFiles: ['<rootDir>/tests/jest.setup.ts'],
   testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.jest.json' }]
+  },
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1'
   },
