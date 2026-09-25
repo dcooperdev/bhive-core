@@ -37,6 +37,18 @@ export class InMemoryStorage implements StorageProvider {
     });
   }
 
+  async setIfNotExists(key: string, value: string, ttlMs: number): Promise<boolean> {
+    // Check and set happen in one synchronous turn, so no other call can
+    // interleave: atomic within this process (the only scope this storage has).
+    const entry = this.store.get(key);
+    if (entry && (entry.expiresAt === undefined || entry.expiresAt > Date.now())) {
+      return false;
+    }
+
+    this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
+    return true;
+  }
+
   async delete(key: string): Promise<void> {
     this.store.delete(key);
   }

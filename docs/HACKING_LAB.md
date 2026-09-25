@@ -9,7 +9,7 @@ and the primitive-level tests referenced below - run them yourself with
 Every snippet below assumes:
 
 ```typescript
-import { BeeManager, MessageEncryption, PromptInjectionDetector } from '@bhive-ai/core';
+import { BeeManager, PromptInjectionDetector, sealSecureMessage, BeeIdentityManager } from '@bhive-ai/core';
 
 const beeManager = new BeeManager('gemini-1.5-flash', {
   apiKey: process.env.GOOGLE_API_KEY,
@@ -31,22 +31,28 @@ await beeManager.delegateToAgent('classifier', 'responder', 'Draft a confidentia
 const intercepted = beeManager.getDelegationHistory().at(-1)!.secureMessage!;
 console.log(intercepted.data); // base64 ciphertext - not the plaintext task
 
-// The attacker doesn't have "responder"'s private key, so:
-const encryption = new MessageEncryption();
-encryption.decrypt(
-  { encrypted: intercepted.data as string, iv: intercepted.iv!, authTag: intercepted.authTag!, encryptedKey: intercepted.encryptedKey! },
-  attackerPrivateKey // wrong key
-);
-// throws - RSA-OAEP unwrap fails, AES-GCM auth tag won't verify either
+// Any Bee other than "responder" - even one in the same Hive - tries to open it:
+const eve = beeManager.createBee({ name: 'eve', prompt: 'Eavesdrop', tools: [] });
+eve.openMessage(intercepted);
+// throws - eve doesn't hold the X25519 key named by intercepted.encryptionKeyId,
+// and forcing eve's own key id in fails AES-GCM authentication
 ```
 
-**Result**: ❌ fails. Only the private key matching the `to` Bee's
-identity can unwrap the AES key and decrypt.
+**Result**: ❌ fails. Only the `to` Bee's X25519 encryption key (current
+or still inside its retention window) can derive the message key. Once
+that key rotates out and is deleted, *no one* can decrypt the captured
+message, including someone who steals responder's keys later (forward
+secrecy).
+The envelope carries only public values: the sender's one-time
+ephemeral public key, the IV and the auth tag. The sender's signature is
+sealed *inside* the ciphertext (`intercepted.signature` is `undefined`),
+so the attacker can't even test guesses about the content against it.
 
 **Test**: `Scenario 1` in `tests/security/integration.test.ts`; the
 encryption primitive itself is exhaustively covered in
-`tests/security/MessageEncryption.test.ts` ("should NOT let a third
-party decrypt with the wrong private key").
+`tests/security/MessageEncryption.test.ts` ("encrypts to A and fails to
+decrypt with B's private key", plus the forward-secrecy test that
+rotates a key out and shows even a fully stolen keyring can't decrypt).
 
 ## Scenario 2: Forge a message
 
@@ -57,18 +63,30 @@ version instead.
 ```typescript
 const captured = beeManager.getDelegationHistory().at(-1)!.secureMessage!;
 
-beeManager.getMessageSigner().verify(
-  'a completely different task the attacker substituted',
-  { signature: captured.signature!, nonce: 'unused-nonce', timestamp: captured.timestamp },
-  classifierIdentity
-);
-// { valid: false, reason: 'Invalid signature' }
+// (a) Flip a byte of the ciphertext:
+const bytes = Buffer.from(captured.data as string, 'base64');
+bytes[0] ^= 1;
+await beeManager.verifyIncomingMessage({ ...captured, data: bytes.toString('base64') }, 'classifier', 'responder');
+// throws SecurityError: Decryption failed (AES-GCM auth tag) - rejected before any signature check
+
+// (b) Encrypt a brand-new task to responder's public key (anyone can), signed with a key the attacker owns:
+const attacker = new BeeIdentityManager().registerBeeIdentity('classifier');
+const responder = beeManager.getIdentityManager().getBeeIdentity('responder')!;
+const forged = sealSecureMessage(attacker, responder, 'transfer everything', { sign: true, encrypt: true });
+await beeManager.verifyIncomingMessage(forged, 'classifier', 'responder');
+// decrypts fine, then throws: Message verification failed: Invalid signature
+// (sealing it with { encrypt: true } only is rejected too: "unsigned but signing is required")
 ```
 
-**Result**: ❌ fails. The HMAC-SHA256 signature covers the exact
-payload; any change at all invalidates it.
+**Result**: ❌ fails. Receiving is decrypt-then-verify: GCM rejects any
+change to the envelope, and the Ed25519 signature sealed inside covers
+`{ id, from, to, data }`. Producing a valid signature needs
+classifier's private signing key, which only classifier's own
+`BeeKeyring` holds. Not the attacker, and not `BeeManager` either.
 
 **Test**: `Scenario 4` in `tests/security/integration.test.ts`;
+`tests/security/decryptThenVerify.test.ts` (every envelope field
+tampered, forged inner signatures, unsigned downgrade, call order);
 `tests/security/MessageSigner.test.ts` ("should reject when the data
 has been tampered with").
 
@@ -113,16 +131,15 @@ await beeManager.delegateToAgent('classifier', 'responder', 'Draft a reply');
 const captured = beeManager.getDelegationHistory().at(-1)!.secureMessage!;
 
 // Attacker resubmits the exact same envelope:
-beeManager.getMessageSigner().verify(
-  captured.data,
-  { signature: captured.signature!, nonce: captured.nonce!, timestamp: captured.timestamp },
-  classifierIdentity
-);
-// { valid: false, reason: 'Replay detected: nonce already used' }
+await beeManager.verifyIncomingMessage(captured, 'classifier', 'responder');
+// decrypts and the signature checks out, but throws:
+// Message verification failed: Replay detected: nonce already used
 ```
 
-**Result**: ❌ fails. `MessageSigner` tracks every nonce it has
-successfully verified; the same nonce is never accepted twice.
+**Result**: ❌ fails. `MessageSigner` accepts each nonce once within its
+validity window. With a shared `StorageProvider`, the nonce is claimed
+atomically via `setIfNotExists()`, so the replay fails even against a
+*different* process sharing that storage.
 
 **Test**: `Scenario 3` in `tests/security/integration.test.ts`;
 `tests/security/MessageSigner.test.ts` ("should reject the same nonce
@@ -168,7 +185,8 @@ isolation, and the "trust levels" describe block in
 npm test -- tests/security
 ```
 
-All six scenarios (the five above, plus a full signed+encrypted+attested
-A→B→C chain proving the mitigations compose correctly together) run as
-real tests against real RSA-2048 keys and real AES-256-GCM ciphertext -
-nothing here is mocked at the crypto layer.
+All the scenarios (the five above, a full signed+encrypted+attested
+A→B→C chain, two Bees in separate trust domains exchanging messages
+with only each other's public keys, and a key-less forgery attempt) run
+as real tests against real Ed25519/X25519 keys and real AES-256-GCM
+ciphertext. Nothing here is mocked at the crypto layer.

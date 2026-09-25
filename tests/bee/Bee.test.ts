@@ -419,12 +419,15 @@ describe('Bee', () => {
   });
 
   describe('security', () => {
-    it('should expose an RSA identity via getIdentity()', () => {
+    it('should expose a public-only Ed25519/X25519 identity via getIdentity()', () => {
       bee = new Bee('identity-bee', 'Test', [], mockLLM, beeConfig, 'gemini-1.5-flash');
       const identity = bee.getIdentity();
 
       expect(identity.beeName).toBe('identity-bee');
-      expect(identity.publicKey).toMatch(/-----BEGIN PUBLIC KEY-----/);
+      expect(identity.signingPublicKey).toEqual(expect.any(String));
+      expect(identity.encryptionPublicKey).toEqual(expect.any(String));
+      expect(identity).not.toHaveProperty('signingPrivateKey');
+      expect(identity).not.toHaveProperty('encryptionPrivateKey');
     });
 
     it('should expose its security context via getSecurityContext()', () => {

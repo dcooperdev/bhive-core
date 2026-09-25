@@ -404,12 +404,11 @@ describe('Agent-to-agent delegation', () => {
       beeManager.createBee({ name: 'classifier', prompt: 'Classify', tools: [], llmAdapter: new MockLLM() });
       beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
 
-      // Corrupt responder's identity so its public/private keys no longer
-      // match - decryption fails even though everything else is normal.
-      const identityManager = beeManager.getIdentityManager();
-      const responderIdentity = identityManager.getBeeIdentity('responder')!;
-      const otherIdentity = identityManager.registerBeeIdentity('unrelated-bee');
-      identityManager.loadIdentity({ ...responderIdentity, privateKey: otherIdentity.privateKey });
+      // Simulate the recipient no longer holding the key the message was
+      // encrypted to (e.g. it was rotated out and deleted).
+      jest.spyOn(beeManager.getBee('responder')!, 'openMessage').mockImplementation(() => {
+        throw new Error('Encryption key "abc" is unknown or has been deleted');
+      });
 
       await expect(beeManager.delegateToAgent('classifier', 'responder', 'Draft a reply')).rejects.toThrow(
         /Decryption failed/
@@ -420,8 +419,25 @@ describe('Agent-to-agent delegation', () => {
       expect(failures.length).toBeGreaterThan(0);
     });
 
+    it('should refuse to sign as a sender whose keys are held by another party', async () => {
+      const remote = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
+      remote.createBee({ name: 'remote-bee', prompt: 'Remote', tools: [], llmAdapter: new MockLLM() });
+
+      const beeManager = new BeeManager('gemini-1.5-flash', {
+        apiKey: 'test-api-key',
+        securityOptions: { enableSigning: true }
+      });
+      beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+      beeManager.getIdentityManager().loadIdentity(remote.getIdentityManager().getBeeIdentity('remote-bee')!);
+
+      // This manager only has remote-bee's public key, so it cannot sign as it.
+      await expect(beeManager.delegateToAgent('remote-bee', 'responder', 'Impersonated task')).rejects.toThrow(
+        /Cannot sign as "remote-bee"/
+      );
+    });
+
     describe('verifyIncomingMessage', () => {
-      it('should throw when the recipient has no registered identity', () => {
+      it('should throw when no local Bee holds the recipient keys', async () => {
         const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
         const message = {
           id: '1',
@@ -432,15 +448,16 @@ describe('Agent-to-agent delegation', () => {
           encrypted: true,
           iv: 'x',
           authTag: 'y',
-          encryptedKey: 'z'
+          ephemeralPublicKey: 'z',
+          encryptionKeyId: 'k'
         };
 
-        expect(() => beeManager.verifyIncomingMessage(message, 'a', 'unregistered')).toThrow(
-          /No identity registered for recipient/
+        await expect(beeManager.verifyIncomingMessage(message, 'a', 'unregistered')).rejects.toThrow(
+          /No local Bee holds the keys for recipient/
         );
       });
 
-      it('should throw when the sender has no registered identity', () => {
+      it('should throw when the sender has no registered identity', async () => {
         const beeManager = new BeeManager('gemini-1.5-flash', { apiKey: 'test-api-key' });
         beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
 
@@ -454,12 +471,12 @@ describe('Agent-to-agent delegation', () => {
           nonce: 'xyz'
         };
 
-        expect(() => beeManager.verifyIncomingMessage(message, 'unregistered-sender', 'responder')).toThrow(
+        await expect(beeManager.verifyIncomingMessage(message, 'unregistered-sender', 'responder')).rejects.toThrow(
           /No identity registered for sender/
         );
       });
 
-      it('should throw when the signature does not verify', () => {
+      it('should throw when the signature does not verify', async () => {
         const beeManager = new BeeManager('gemini-1.5-flash', {
           apiKey: 'test-api-key',
           securityOptions: { enableSigning: true }
@@ -473,12 +490,29 @@ describe('Agent-to-agent delegation', () => {
           to: 'responder',
           timestamp: Date.now(),
           data: 'task',
-          signature: '00'.repeat(32),
+          signature: Buffer.alloc(64).toString('base64'),
           nonce: 'a-fresh-nonce'
         };
 
-        expect(() => beeManager.verifyIncomingMessage(message, 'classifier', 'responder')).toThrow(
+        await expect(beeManager.verifyIncomingMessage(message, 'classifier', 'responder')).rejects.toThrow(
           /Message verification failed/
+        );
+      });
+
+      it('should reject a validly signed message re-addressed to a different recipient', async () => {
+        const beeManager = new BeeManager('gemini-1.5-flash', {
+          apiKey: 'test-api-key',
+          securityOptions: { enableSigning: true }
+        });
+        beeManager.createBee({ name: 'classifier', prompt: 'Classify', tools: [], llmAdapter: new MockLLM() });
+        beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+        beeManager.createBee({ name: 'executor', prompt: 'Execute', tools: [], llmAdapter: new MockLLM() });
+
+        const responder = beeManager.getIdentityManager().getBeeIdentity('responder')!;
+        const message = beeManager.getBee('classifier')!.sealMessage(responder, 'task for responder', { sign: true });
+
+        await expect(beeManager.verifyIncomingMessage(message, 'classifier', 'executor')).rejects.toThrow(
+          /Invalid signature/
         );
       });
     });

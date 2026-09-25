@@ -14,6 +14,20 @@ export interface StorageProvider {
   delete(key: string): Promise<void>;
   has(key: string): Promise<boolean>;
 
+  /**
+   * Atomically sets `key` to `value` only if it does not already exist,
+   * with the entry expiring after `ttlMs`. Returns true if this call set
+   * it, false if it already existed (meaning: someone else got there
+   * first - used for distributed replay/deduplication where a check
+   * followed by a separate set would race across processes).
+   *
+   * Must be a single atomic operation in the backend: e.g.
+   * `SET key value NX PX ttlMs` in Redis, or `INSERT ... ON CONFLICT DO
+   * NOTHING` (plus an expiry column checked on read) in SQL. An expired
+   * entry counts as absent.
+   */
+  setIfNotExists(key: string, value: string, ttlMs: number): Promise<boolean>;
+
   /** Appends a value to the end of the list stored at `key`. */
   pushToList<T = unknown>(key: string, value: T): Promise<void>;
   /** Removes and returns the value at the front of the list, if any. */

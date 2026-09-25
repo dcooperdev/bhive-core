@@ -18,12 +18,18 @@ import { BeeConfig } from './BeeConfig';
 import { Bee } from './Bee';
 import { BeeSecurityContext } from './BeeSecurityContext';
 import { BeeIdentityManager } from './BeeIdentityManager';
+import { BeeKeyring } from './BeeKeyring';
 import { PromptInjectionDetector } from '../security/PromptInjectionDetector';
 import { MessageSigner } from '../security/MessageSigner';
-import { MessageEncryption } from '../security/MessageEncryption';
 import { AttestationChainService } from '../security/AttestationChain';
 import { AuditLog } from '../security/AuditLog';
-import { SecurityError } from '../security/SecureMessage';
+import {
+  OpenedMessage,
+  SecurityError,
+  attestationFingerprint,
+  sealSecureMessage,
+  signedContent
+} from '../security/SecureMessage';
 
 export interface BeeManagerOptions {
   /** Used to construct the default provider adapter when no llmAdapter is given. */
@@ -46,7 +52,7 @@ export interface BeeManagerOptions {
   eventPublisher?: EventPublisher;
   /** Signing/encryption are opt-in; omitting this preserves plain-text v0.3 delegation. */
   securityOptions?: SecurityConfig;
-  /** Shared RSA identity registry for every Bee this manager creates. Defaults to a fresh instance. */
+  /** Shared public-key registry for every Bee this manager creates. Defaults to a fresh instance. */
   identityManager?: BeeIdentityManager;
   /** Where security-relevant events get recorded. Defaults to an in-memory log (storage-backed when storageProvider is given). */
   auditLog?: AuditLog;
@@ -131,8 +137,13 @@ export class BeeManager {
   private identityManager: BeeIdentityManager;
   private auditLog: AuditLog;
   private injectionDetector = new PromptInjectionDetector();
-  private messageSigner = new MessageSigner();
-  private messageEncryption = new MessageEncryption();
+  private messageSigner: MessageSigner;
+  /**
+   * Keyrings for senders that aren't Bees (e.g. "system" calling
+   * delegateToAgent() directly). Here BeeManager itself is the sender, so
+   * it legitimately owns these keys - never a Bee's.
+   */
+  private externalSenders = new Map<string, BeeKeyring>();
   private attestationChain: AttestationChainService;
 
   private delegationHistory: DelegationRequest[] = [];
@@ -156,6 +167,8 @@ export class BeeManager {
     this.identityManager = options.identityManager ?? new BeeIdentityManager();
     this.auditLog = options.auditLog ?? new AuditLog(this.storageProvider, `hive:${defaultModel}:audit-log`);
     this.attestationChain = new AttestationChainService(this.storageProvider);
+    // With a storageProvider, nonces are claimed atomically in shared storage (cross-process replay protection).
+    this.messageSigner = new MessageSigner(this.storageProvider);
 
     const limits = this.beeConfig.getModelLimits(defaultModel);
 
@@ -280,29 +293,21 @@ export class BeeManager {
     let secureMessage: SecureAgentMessage | undefined;
 
     if (this.securityOptions.enableSigning || this.securityOptions.enableEncryption) {
-      const senderIdentity = this.identityManager.getBeeIdentity(fromBeeName) ?? this.identityManager.registerBeeIdentity(fromBeeName);
       // toBeeName is guaranteed registered: `targetBee` above only exists in
       // `this.bees` if it was built by this manager's createBee(), which
       // always registers its identity in this same identityManager.
       const recipientIdentity = this.identityManager.getBeeIdentity(toBeeName)!;
+      const sealOptions = {
+        sign: this.securityOptions.enableSigning,
+        encrypt: this.securityOptions.enableEncryption
+      };
 
-      secureMessage = { id: randomUUID(), from: fromBeeName, to: toBeeName, timestamp: Date.now(), data: safeTask };
-
-      if (this.securityOptions.enableSigning) {
-        const signed = this.messageSigner.sign(secureMessage.data, senderIdentity);
-        secureMessage.signature = signed.signature;
-        secureMessage.nonce = signed.nonce;
-        secureMessage.timestamp = signed.timestamp;
-      }
-
-      if (this.securityOptions.enableEncryption) {
-        const enc = this.messageEncryption.encrypt(JSON.stringify(secureMessage.data), recipientIdentity.publicKey);
-        secureMessage.data = enc.encrypted;
-        secureMessage.iv = enc.iv;
-        secureMessage.authTag = enc.authTag;
-        secureMessage.encryptedKey = enc.encryptedKey;
-        secureMessage.encrypted = true;
-      }
+      // The sender signs with its own key: BeeManager asks the sending Bee
+      // to seal the message rather than ever handling its private key.
+      const senderBee = this.bees.get(fromBeeName);
+      secureMessage = senderBee
+        ? senderBee.sealMessage(recipientIdentity, safeTask, sealOptions)
+        : sealSecureMessage(this.getExternalSenderKeyring(fromBeeName), recipientIdentity, safeTask, sealOptions);
 
       request.secureMessage = secureMessage;
 
@@ -311,7 +316,7 @@ export class BeeManager {
         from: fromBeeName,
         to: toBeeName,
         timestamp: secureMessage.timestamp,
-        signature: secureMessage.signature ?? ''
+        signature: attestationFingerprint(secureMessage)
       });
     }
 
@@ -320,7 +325,7 @@ export class BeeManager {
 
     try {
       const taskForTarget = secureMessage
-        ? this.verifyIncomingMessage(secureMessage, fromBeeName, toBeeName)
+        ? await this.verifyIncomingMessage(secureMessage, fromBeeName, toBeeName)
         : safeTask;
 
       const result = await targetBee.run(taskForTarget, [...chain, toBeeName]);
@@ -348,54 +353,88 @@ export class BeeManager {
    * (if signed) of a secure message, throwing a SecurityError on any
    * failure. Returns the plaintext task ready for the target Bee.
    *
+   * Order is always decrypt-then-verify: the recipient Bee decrypts with
+   * its own key (so it must be a Bee created by this manager), which also
+   * recovers the signature sealed inside the ciphertext; only then is the
+   * signature checked, with the sender's *public* key, over
+   * {id, from, to, data}. With `enableSigning`, unsigned messages are
+   * rejected.
+   *
    * Used internally by delegateToAgent() for same-process delegation,
    * but public and reusable on its own: pair it with a real distributed
    * StorageProvider/EventBus and this is exactly what the receiving
    * process calls after pulling a SecureAgentMessage off the wire.
    */
-  verifyIncomingMessage(message: SecureAgentMessage, fromBeeName: string, toBeeName: string): string {
-    let data = message.data;
+  async verifyIncomingMessage(message: SecureAgentMessage, fromBeeName: string, toBeeName: string): Promise<string> {
+    // Step 1 - recover the plaintext (and the signature sealed with it).
+    // For encrypted messages this is decrypt-then-verify: the signature
+    // lives inside the ciphertext, so nothing can be verified until GCM has
+    // authenticated and decrypted the envelope. Any tampering with the
+    // ciphertext, iv, authTag or header fails here.
+    let opened: OpenedMessage;
 
     if (message.encrypted) {
-      const recipientIdentity = this.identityManager.getBeeIdentity(toBeeName);
-      if (!recipientIdentity) {
-        throw new SecurityError(`No identity registered for recipient "${toBeeName}"`);
+      // Only the recipient Bee can decrypt: BeeManager holds no Bee's encryption key.
+      const recipientBee = this.bees.get(toBeeName);
+      if (!recipientBee) {
+        throw new SecurityError(`No local Bee holds the keys for recipient "${toBeeName}"`);
       }
 
       try {
-        const decrypted = this.messageEncryption.decrypt(
-          {
-            encrypted: data as string,
-            iv: message.iv!,
-            authTag: message.authTag!,
-            encryptedKey: message.encryptedKey!
-          },
-          recipientIdentity.privateKey
-        );
-        data = JSON.parse(decrypted);
+        opened = recipientBee.openMessage(message);
       } catch (error) {
         throw new SecurityError(`Decryption failed: ${(error as Error).message}`);
       }
+    } else {
+      opened = { data: message.data, signature: message.signature };
     }
 
-    if (message.signature) {
-      const senderIdentity = this.identityManager.getBeeIdentity(fromBeeName);
-      if (!senderIdentity) {
-        throw new SecurityError(`No identity registered for sender "${fromBeeName}"`);
+    // Step 2 - verify the signature over the recovered plaintext.
+    if (opened.signature === undefined) {
+      // GCM only proves a message was encrypted *to* the recipient, not *by*
+      // whom - anyone can encrypt to a public key. So when signing is on,
+      // an unsigned message is a downgrade attempt, not a legacy message.
+      if (this.securityOptions.enableSigning) {
+        throw new SecurityError('Message verification failed: message is unsigned but signing is required');
       }
-
-      const verification = this.messageSigner.verify(
-        data,
-        { signature: message.signature, nonce: message.nonce!, timestamp: message.timestamp },
-        senderIdentity
-      );
-
-      if (!verification.valid) {
-        throw new SecurityError(`Message verification failed: ${verification.reason}`);
-      }
+      return opened.data as string;
     }
 
-    return data as string;
+    const senderIdentity = this.identityManager.getBeeIdentity(fromBeeName);
+    if (!senderIdentity) {
+      throw new SecurityError(`No identity registered for sender "${fromBeeName}"`);
+    }
+
+    // Verification needs only the sender's public key.
+    const verification = await this.messageSigner.verify(
+      signedContent(message.id, fromBeeName, toBeeName, opened.data),
+      { signature: opened.signature, nonce: message.nonce ?? '', timestamp: message.timestamp },
+      senderIdentity.signingPublicKey
+    );
+
+    if (!verification.valid) {
+      throw new SecurityError(`Message verification failed: ${verification.reason}`);
+    }
+
+    return opened.data as string;
+  }
+
+  /**
+   * The keyring for a non-Bee sender name, registering one on first use.
+   * Refuses a name whose identity belongs to someone else (a Bee or an
+   * externally loaded identity) - BeeManager can't sign as them.
+   */
+  private getExternalSenderKeyring(senderName: string): BeeKeyring {
+    const existing = this.externalSenders.get(senderName);
+    if (existing) return existing;
+
+    if (this.identityManager.hasIdentity(senderName)) {
+      throw new SecurityError(`Cannot sign as "${senderName}": its private keys are held by another party`);
+    }
+
+    const keyring = this.identityManager.registerBeeIdentity(senderName);
+    this.externalSenders.set(senderName, keyring);
+    return keyring;
   }
 
   /** Every delegation attempted through this BeeManager, oldest first. */
@@ -403,7 +442,7 @@ export class BeeManager {
     return [...this.delegationHistory];
   }
 
-  /** The shared RSA identity registry used to sign/encrypt/verify messages between this manager's Bees. */
+  /** The shared public-key registry used to verify/encrypt messages between this manager's Bees. */
   getIdentityManager(): BeeIdentityManager {
     return this.identityManager;
   }

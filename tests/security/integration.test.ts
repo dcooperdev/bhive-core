@@ -1,6 +1,9 @@
 import { BeeManager } from '../../src/bee/BeeManager';
 import { createDelegationTool } from '../../src/bee/delegationTools';
-import { MessageEncryption } from '../../src/security/MessageEncryption';
+import { BeeIdentityManager } from '../../src/bee/BeeIdentityManager';
+import { MessageSigner } from '../../src/security/MessageSigner';
+import { openSecureMessage, sealSecureMessage, signedContent } from '../../src/security/SecureMessage';
+import { InMemoryStorage } from '../../src/storage/InMemoryStorage';
 import { MockLLM } from '../__mocks__/MockLLM';
 
 describe('Security integration scenarios', () => {
@@ -20,20 +23,13 @@ describe('Security integration scenarios', () => {
     const intercepted = beeManager.getDelegationHistory().slice(-1)[0].secureMessage!;
     expect(intercepted.encrypted).toBe(true);
 
-    const eveIdentity = beeManager.getIdentityManager().getBeeIdentity('eve')!;
-    const encryption = new MessageEncryption();
+    // Neither the recipient's key id nor eve's own current key id lets eve decrypt.
+    const eve = beeManager.getBee('eve')!;
+    expect(() => eve.openMessage(intercepted)).toThrow(/unknown or has been deleted/);
+    expect(() => eve.openMessage({ ...intercepted, encryptionKeyId: eve.getIdentity().encryptionKeyId })).toThrow();
 
-    expect(() =>
-      encryption.decrypt(
-        {
-          encrypted: intercepted.data as string,
-          iv: intercepted.iv!,
-          authTag: intercepted.authTag!,
-          encryptedKey: intercepted.encryptedKey!
-        },
-        eveIdentity.privateKey
-      )
-    ).toThrow();
+    // The captured envelope carries no private key material at all.
+    expect(JSON.stringify(intercepted)).not.toMatch(/PRIVATE/);
   });
 
   it('Scenario 2: prompt injection in a delegated task is detected and sanitized before reaching the target', async () => {
@@ -73,10 +69,10 @@ describe('Security integration scenarios', () => {
     // The manager's own signer already verified (and consumed) this exact
     // nonce while processing the real delegation above - an attacker
     // resubmitting the captured message is replaying a used nonce.
-    const replay = beeManager.getMessageSigner().verify(
-      captured.data,
+    const replay = await beeManager.getMessageSigner().verify(
+      signedContent(captured.id, 'classifier', 'responder', captured.data),
       { signature: captured.signature!, nonce: captured.nonce!, timestamp: captured.timestamp },
-      classifierIdentity
+      classifierIdentity.signingPublicKey
     );
 
     expect(replay.valid).toBe(false);
@@ -99,13 +95,11 @@ describe('Security integration scenarios', () => {
 
     // A fresh nonce isolates this from replay detection - we specifically
     // want to prove tampered *content* invalidates the signature.
-    const tampered = beeManager
-      .getMessageSigner()
-      .verify(
-        'a completely different task the attacker substituted',
-        { signature: captured.signature!, nonce: 'never-used-before-nonce', timestamp: captured.timestamp },
-        classifierIdentity
-      );
+    const tampered = await beeManager.getMessageSigner().verify(
+      signedContent(captured.id, 'classifier', 'responder', 'a completely different task the attacker substituted'),
+      { signature: captured.signature!, nonce: 'never-used-before-nonce', timestamp: captured.timestamp },
+      classifierIdentity.signingPublicKey
+    );
 
     expect(tampered.valid).toBe(false);
     expect(tampered.reason).toMatch(/Invalid signature/);
@@ -186,18 +180,97 @@ describe('Security integration scenarios', () => {
     expect(beeManager.getBee('responder')!.getRuns()).toHaveLength(1);
     expect(beeManager.getBee('executor')!.getRuns()).toHaveLength(1);
 
-    // Every hop was signed and encrypted.
+    // Every hop was signed and encrypted - with the signature sealed inside the ciphertext.
     const secureMessages = beeManager.getDelegationHistory().map(d => d.secureMessage);
-    expect(secureMessages.every(m => m?.signature && m?.encrypted)).toBe(true);
+    expect(secureMessages.every(m => m?.encrypted && m?.nonce && m?.signature === undefined)).toBe(true);
 
     // The attestation chain records both hops and is internally consistent.
     const chain = await beeManager.getAttestationChain();
     expect(chain).toHaveLength(2);
+    // Encrypted hops are attested by an envelope digest, not the (hidden) signature.
+    expect(chain.every(link => /^sha256:[0-9a-f]{64}$/.test(link.signature))).toBe(true);
     await expect(beeManager.verifyAttestationChain()).resolves.toBe(true);
 
     // The audit trail covers the full lifecycle of both delegations.
     const auditTrail = await beeManager.getAuditLog().getAuditHistory();
     const auditTypes = auditTrail.map(entry => entry.type);
     expect(auditTypes).toEqual(expect.arrayContaining(['message_sent', 'message_received']));
+  });
+
+  it("Scenario 7: two Bees in separate trust domains exchange a signed + encrypted message using only each other's public keys", async () => {
+    // Two "processes", each with its own registry and its own Bee's private keyring.
+    const registryA = new BeeIdentityManager();
+    const registryB = new BeeIdentityManager();
+    const alice = registryA.registerBeeIdentity('alice');
+    const bob = registryB.registerBeeIdentity('bob');
+
+    // The only thing that crosses between them: public identities.
+    const alicePublic = registryA.getBeeIdentity('alice')!;
+    const bobPublic = registryB.getBeeIdentity('bob')!;
+    expect(JSON.stringify([alicePublic, bobPublic])).not.toMatch(/PrivateKey/);
+    registryA.loadIdentity(bobPublic);
+    registryB.loadIdentity(alicePublic);
+
+    // Process A: alice signs with her own key and encrypts to bob's public key.
+    const message = sealSecureMessage(alice, registryA.getBeeIdentity('bob')!, 'wire $100 to account 42', {
+      sign: true,
+      encrypt: true
+    });
+    expect(message.data).not.toContain('wire');
+
+    // The signature travels inside the ciphertext, never on the wire in the clear.
+    expect(message.signature).toBeUndefined();
+
+    // Process B: bob decrypts with his own key first, then verifies the
+    // recovered signature with alice's public key.
+    const sharedNonceStore = new InMemoryStorage();
+    const verifierB = new MessageSigner(sharedNonceStore);
+    const opened = openSecureMessage(bob, message);
+    const verification = await verifierB.verify(
+      signedContent(message.id, message.from, message.to, opened.data),
+      { signature: opened.signature!, nonce: message.nonce!, timestamp: message.timestamp },
+      registryB.getBeeIdentity('alice')!.signingPublicKey
+    );
+
+    expect(opened.data).toBe('wire $100 to account 42');
+    expect(verification).toEqual({ valid: true });
+
+    // A second verifier sharing the nonce store (another instance of process B) rejects the replay.
+    const replay = await new MessageSigner(sharedNonceStore).verify(
+      signedContent(message.id, message.from, message.to, opened.data),
+      { signature: opened.signature!, nonce: message.nonce!, timestamp: message.timestamp },
+      registryB.getBeeIdentity('alice')!.signingPublicKey
+    );
+    expect(replay.reason).toMatch(/Replay detected/);
+
+    // Neither registry can hand out the other side's keyring.
+    expect(() => registryA.registerBeeIdentity('bob')).toThrow(/already registered/);
+    expect(() => registryB.registerBeeIdentity('alice')).toThrow(/already registered/);
+
+    alice.destroy();
+    bob.destroy();
+  });
+
+  it("Scenario 8: a verifier holding only public keys cannot forge a Bee's signature", async () => {
+    const beeManager = new BeeManager('gemini-1.5-flash', {
+      apiKey: 'test-api-key',
+      securityOptions: { enableSigning: true }
+    });
+    beeManager.createBee({ name: 'classifier', prompt: 'Classify', tools: [], llmAdapter: new MockLLM() });
+    beeManager.createBee({ name: 'responder', prompt: 'Respond', tools: [], llmAdapter: new MockLLM() });
+
+    // What the manager's registry knows about classifier: public keys only.
+    const classifierPublic = beeManager.getIdentityManager().getBeeIdentity('classifier')!;
+    expect(classifierPublic).not.toHaveProperty('signingPrivateKey');
+
+    // The best a key-less forger can do is sign with some other key it owns.
+    const forgerRegistry = new BeeIdentityManager();
+    const forger = forgerRegistry.registerBeeIdentity('classifier');
+    const forged = sealSecureMessage(forger, beeManager.getIdentityManager().getBeeIdentity('responder')!, 'escalate privileges', {
+      sign: true
+    });
+
+    await expect(beeManager.verifyIncomingMessage(forged, 'classifier', 'responder')).rejects.toThrow(/Invalid signature/);
+    forger.destroy();
   });
 });

@@ -9,7 +9,8 @@ import {
   QueueConfig,
   ToolExecutionContext,
   TrustLevel,
-  BeeIdentity
+  BeePublicIdentity,
+  SecureAgentMessage
 } from '../types';
 import { LLMAdapter } from '../providers/LLMAdapter';
 import { StorageProvider } from '../providers/StorageProvider';
@@ -18,9 +19,11 @@ import { EventPublisher } from '../providers/EventBus';
 import { BeeConfig, ModelLimits } from './BeeConfig';
 import { BeeSecurityContext } from './BeeSecurityContext';
 import { BeeIdentityManager } from './BeeIdentityManager';
+import { BeeKeyring } from './BeeKeyring';
 import { PromptInjectionDetector } from '../security/PromptInjectionDetector';
 import { ToolCallValidator } from '../security/ToolCallValidator';
 import { AuditLog } from '../security/AuditLog';
+import { OpenedMessage, openSecureMessage, sealSecureMessage } from '../security/SecureMessage';
 import type { BeeManager } from './BeeManager';
 
 export interface BeeProviderOptions {
@@ -37,8 +40,10 @@ export interface BeeProviderOptions {
   allowedDelegates?: string[];
   /** Full security policy (whitelist, rate limits, tool restrictions, trust level, isolation). Overrides trustLevel/allowedDelegates when given. */
   securityContext?: BeeSecurityContext;
-  /** Shared identity registry. Set by BeeManager.createBee() so Bees can verify/encrypt to each other; defaults to a private instance otherwise. */
+  /** Shared public-key registry. Set by BeeManager.createBee() so Bees can verify/encrypt to each other; defaults to a private instance otherwise. */
   identityManager?: BeeIdentityManager;
+  /** Existing Ed25519 signing key (base64 PKCS#8 DER) to load instead of generating one. Encryption keys are always generated and rotated. */
+  signingPrivateKey?: string;
   /** Set by BeeManager.createBee() so injection detections are recorded centrally too. */
   auditLog?: AuditLog;
 }
@@ -84,7 +89,8 @@ export class Bee {
   private beeManager?: BeeManager;
   private securityContext: BeeSecurityContext;
   private identityManager: BeeIdentityManager;
-  private identity: BeeIdentity;
+  /** This Bee's private keys. Never exposed; used only by sealMessage()/openMessage(). */
+  private keyring: BeeKeyring;
   private auditLog?: AuditLog;
   private injectionDetector = new PromptInjectionDetector();
   private toolCallValidator = new ToolCallValidator();
@@ -124,7 +130,7 @@ export class Bee {
         allowedDelegates: options.allowedDelegates ?? []
       });
     this.identityManager = options.identityManager ?? new BeeIdentityManager();
-    this.identity = this.identityManager.registerBeeIdentity(this);
+    this.keyring = this.identityManager.registerBeeIdentity(this, { signingPrivateKey: options.signingPrivateKey });
     this.auditLog = options.auditLog;
 
     if (this.queueConfig.persist && !this.storageProvider) {
@@ -190,9 +196,28 @@ export class Bee {
     return this.beeManager.getRegisteredAgents().filter(name => name !== this.name);
   }
 
-  /** This Bee's RSA identity (public key openly shareable, private key never leaves the identityManager). */
-  getIdentity(): BeeIdentity {
-    return this.identity;
+  /** This Bee's public identity (Ed25519 signing key + current X25519 encryption key). Private keys are never exposed. */
+  getIdentity(): BeePublicIdentity {
+    return this.keyring.getPublicIdentity();
+  }
+
+  /**
+   * Builds a SecureAgentMessage from this Bee to `recipient`, signed with
+   * this Bee's own Ed25519 key and/or encrypted to the recipient's current
+   * X25519 key. The only code path that uses this Bee's signing key.
+   */
+  sealMessage(recipient: BeePublicIdentity, data: unknown, options: { sign?: boolean; encrypt?: boolean }): SecureAgentMessage {
+    return sealSecureMessage(this.keyring, recipient, data, options);
+  }
+
+  /**
+   * Decrypts a SecureAgentMessage addressed to this Bee with its own
+   * encryption key, recovering the plaintext and the signature sealed
+   * inside it. Does not verify the signature - pass the result to
+   * MessageSigner.verify() with the sender's public key for that.
+   */
+  openMessage(message: SecureAgentMessage): OpenedMessage {
+    return openSecureMessage(this.keyring, message);
   }
 
   /** This Bee's security policy (delegation whitelist, rate limits, tool restrictions, trust level). */

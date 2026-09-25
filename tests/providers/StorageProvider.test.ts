@@ -13,6 +13,38 @@ function describeStorageProviderContract(providerName: string, factory: () => St
       storage = factory();
     });
 
+    describe('setIfNotExists', () => {
+      it('should set the key and return true on the first call', async () => {
+        expect(await storage.setIfNotExists('nonce', '1', 1_000)).toBe(true);
+        expect(await storage.get('nonce')).toBe('1');
+      });
+
+      it('should return false and not overwrite on a second call before the TTL', async () => {
+        await storage.setIfNotExists('nonce', 'first', 1_000);
+
+        expect(await storage.setIfNotExists('nonce', 'second', 1_000)).toBe(false);
+        expect(await storage.get('nonce')).toBe('first');
+      });
+
+      it('should return false for a key already set via set()', async () => {
+        await storage.set('nonce', 'existing');
+        expect(await storage.setIfNotExists('nonce', '1', 1_000)).toBe(false);
+      });
+
+      it('should return true again once the TTL has expired', async () => {
+        await storage.setIfNotExists('nonce', 'first', 10);
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(await storage.setIfNotExists('nonce', 'second', 1_000)).toBe(true);
+        expect(await storage.get('nonce')).toBe('second');
+      });
+
+      it('should let exactly one of many concurrent callers win', async () => {
+        const results = await Promise.all(Array.from({ length: 20 }, () => storage.setIfNotExists('nonce', '1', 1_000)));
+        expect(results.filter(Boolean)).toHaveLength(1);
+      });
+    });
+
     describe('key/value', () => {
       it('should return undefined for a missing key', async () => {
         expect(await storage.get('missing')).toBeUndefined();

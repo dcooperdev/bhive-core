@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.6.0 - Asymmetric Security Layer (Sep 24, 2026)
+
+**Breaking release.** `BeeIdentity`, `BeeIdentityManager`, `MessageSigner`,
+`MessageEncryption`, `SecureAgentMessage` and `StorageProvider` all changed,
+with no compatibility shim. See [docs/MIGRATION_0.6.md](./docs/MIGRATION_0.6.md).
+Fixes all four items from the v0.5.x security audit.
+
+### 💥 Breaking changes
+- **Ed25519 signatures replace HMAC-with-shared-secret.** `MessageSigner.verify()` is now `async` and takes the sender's `signingPublicKey` instead of a full identity. Verifiers never need a secret, so a compromised verifier (e.g. `BeeManager`) can't forge a Bee's signature.
+- **Separate signing and encryption keys.** `BeeIdentity.publicKey`/`privateKey` (one RSA-2048 key for both jobs) are removed. They're replaced by an Ed25519 signing keypair and X25519 encryption keypairs (`signingPublicKey`, `encryptionPublicKey`, `encryptionKeyId`, `encryptionKeySignature`, plus the private halves). Keys are base64 DER.
+- **Forward-secret encryption replaces static RSA-OAEP.** `MessageEncryption` generates a fresh X25519 keypair per message, then does ECDH with the recipient's current key, HKDF-SHA256 (salt = both public keys, info = algorithm + key id) and AES-256-GCM, with the header bound as additional data and the tag length pinned. The new envelope is `{ alg, ephemeralPublicKey, recipientKeyId, iv, authTag, ciphertext }`. Recipient encryption keys **rotate** (default every 15 min) and old private keys are **deleted** after a retention window (default 5 min). Stealing a Bee's keys at time T no longer exposes traffic encrypted to keys deleted before T.
+- **Private keys stay with their Bee.** `BeeIdentityManager` is now a public-key registry. `registerBeeIdentity()` returns the private `BeeKeyring` once and throws on duplicate names. `getBeeIdentity()` returns `BeePublicIdentity` only. `loadIdentity()` accepts public identities and checks their encryption-key signature. `Bee.getIdentity()` is public-only.
+- **BeeManager no longer signs or decrypts on Bees' behalf.** It asks the sending Bee to seal (`Bee.sealMessage()`) and the receiving Bee to open (`Bee.openMessage()`), then verifies with public keys only. `verifyIncomingMessage()` is now `async`. For non-Bee senders (e.g. `"system"`), BeeManager signs with a keyring it owns for that name, and refuses names whose keys belong to someone else.
+- **Signed delegation content now covers `{ id, from, to, data }`**, so a signed message can't be re-addressed, re-attributed or re-id'd.
+- **Signature sealed inside the ciphertext.** For signed + encrypted messages, `{ data, signature }` is encrypted together and `message.signature` is unset. A visible signature over the plaintext would let an eavesdropper confirm guesses of low-entropy payloads offline. Receiving is strictly decrypt-then-verify. `Bee.openMessage()` / `openSecureMessage()` return `{ data, signature? }`. Signed-only messages are unchanged.
+- **Unsigned messages are rejected when `enableSigning` is on.** GCM only proves a message was encrypted *to* a Bee, not by whom, so an unsigned encrypted message is treated as a downgrade attempt.
+- `AttestationChain` records a `sha256:` envelope digest (`attestationFingerprint()`) for encrypted messages instead of the signature.
+- **`StorageProvider.setIfNotExists(key, value, ttlMs)`** is a new required method: an atomic set-if-absent with TTL (Redis `SET NX PX`, SQL `INSERT ... ON CONFLICT DO NOTHING`). Implemented in `InMemoryStorage`.
+- **Atomic distributed replay protection.** With a `StorageProvider`, `MessageSigner` claims each nonce via `setIfNotExists()` instead of read-then-write, so exactly one verifier across processes sharing that storage accepts a given envelope. v0.5.x's nonce snapshot persistence (`ready`, `flushNoncePersistence()`) is removed. `BeeManager` now passes its `storageProvider` to its signer.
+- `SecureAgentMessage.encryptedKey` is replaced by `ephemeralPublicKey` + `encryptionKeyId`. The `EncryptedPayload` export is replaced by `EncryptedEnvelope`.
+
+### ✨ Added
+- `BeeKeyring` (owner-held private keys in ECMAScript private fields; automatic, unref'd-timer encryption key rotation; `rotateEncryptionKey()`, `maintain()`, `destroy()`)
+- `BeePublicIdentity` type; `sealSecureMessage()`, `openSecureMessage()`, `OpenedMessage`, `signedContent()`, `attestationFingerprint()`, `verifyEncryptionKeySignature()`, `ENCRYPTION_ALGORITHM` exports
+- `signingPrivateKey` option on `registerBeeIdentity()` and `Bee`, to load a persistent signing key
+- Key-type checks everywhere: an X25519 key is never accepted as an Ed25519 key or vice versa. Low-order X25519 public keys are rejected.
+
+### 📚 Documentation
+- docs/SECURITY.md rewritten for the new model: a what-an-attacker-can/cannot-do table by compromise level, and the remaining limitations (shared storage needed for multi-instance replay protection, trust-on-first-use for signing keys, time-bounded forward secrecy, same-process Bees share memory)
+- New docs/MIGRATION_0.6.md; HACKING_LAB and README updated
+
+### ✅ Tests
+- MessageSigner, MessageEncryption and BeeIdentityManager suites rewritten. New BeeKeyring suite.
+- Forward-secrecy test: captured ciphertext becomes undecryptable once its key rotates out, even with the whole keyring stolen. Plus a fresh-ephemeral-keypair-per-`encrypt()` test (counts keypair generation) and a check that the envelope holds only public values.
+- Non-repudiation tests: registry lookups carry no private keys, and a key-less forger's signature fails verification.
+- `setIfNotExists` contract tests (first-set, no-overwrite, reuse after TTL, one winner among concurrent callers), plus a concurrent cross-verifier replay test
+- Security integration: two Bees in separate trust domains exchange signed + encrypted messages using only each other's public keys
+- `decryptThenVerify.test.ts`: legitimate messages pass end to end; every envelope field tampered is rejected at decryption with `verify()` never called; forged inner signatures, changed id/nonce/timestamp/sender, unsigned downgrades and replays are rejected after decryption; decrypt always runs before verify. Plus unit tests showing the encrypted envelope exposes no signature and that offline guessing finds nothing to test against.
+
 ## v0.5.2 - Configurable Timeouts (Aug 27, 2026)
 
 ### 🐛 Fixes

@@ -3,7 +3,13 @@ export { Bee, BeeProviderOptions } from './bee/Bee';
 export { BeeConfig, ModelLimits } from './bee/BeeConfig';
 export { createDelegationTool } from './bee/delegationTools';
 export { BeeSecurityContext, MessageValidationResult } from './bee/BeeSecurityContext';
-export { BeeIdentityManager, getDefaultBeeIdentityManager } from './bee/BeeIdentityManager';
+export { BeeIdentityManager, getDefaultBeeIdentityManager, RegisterIdentityOptions } from './bee/BeeIdentityManager';
+export {
+  BeeKeyring,
+  BeeKeyringOptions,
+  DEFAULT_ENCRYPTION_KEY_ROTATION_MS,
+  DEFAULT_ENCRYPTION_KEY_RETENTION_MS
+} from './bee/BeeKeyring';
 
 export { SimpleLLM } from './llm/SimpleLLM';
 export { InMemoryStorage } from './storage/InMemoryStorage';
@@ -40,7 +46,8 @@ export { toAnthropicTools } from './llm/toolCallingFormatters/anthropicToolForma
 
 export { ToolCallValidator, ToolCallValidationResult } from './security/ToolCallValidator';
 export { MessageSigner, SignedEnvelope, VerificationResult } from './security/MessageSigner';
-export { MessageEncryption, EncryptedPayload } from './security/MessageEncryption';
+export { MessageEncryption, EncryptedEnvelope, ENCRYPTION_ALGORITHM } from './security/MessageEncryption';
+export { verifyEncryptionKeySignature } from './security/keys';
 export { PromptInjectionDetector } from './security/PromptInjectionDetector';
 export {
   AttestationChainService,
@@ -49,7 +56,16 @@ export {
   GENESIS_HASH
 } from './security/AttestationChain';
 export { AuditLog, AuditRecordInput } from './security/AuditLog';
-export { createSecureMessage, isSecureMessage, SecurityError } from './security/SecureMessage';
+export {
+  createSecureMessage,
+  isSecureMessage,
+  SecurityError,
+  sealSecureMessage,
+  openSecureMessage,
+  signedContent,
+  attestationFingerprint,
+  OpenedMessage
+} from './security/SecureMessage';
 export {
   MTLSConfig,
   CertificatePaths,
@@ -76,6 +92,7 @@ export {
   DelegationRequest,
   TrustLevel,
   BeeIdentity,
+  BeePublicIdentity,
   SecureAgentMessage,
   SecurityConfig,
   BeeSecurityContextConfig,

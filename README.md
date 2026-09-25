@@ -128,10 +128,13 @@ const beeManager = new BeeManager('your-model-name', {
 });
 ```
 
-Every Bee gets an RSA-2048 identity automatically. Signed messages use
-HMAC-SHA256 with nonce/timestamp replay protection; encrypted messages
-use hybrid RSA-OAEP + AES-256-GCM so only the intended recipient can
-ever decrypt. Every hop is chained into a tamper-evident SHA-256
+Every Bee gets its own Ed25519 signing key and rotating X25519
+encryption keys automatically, and only that Bee holds its private keys.
+Signed messages use Ed25519, verifiable by anyone with the sender's
+public key, with nonce/timestamp replay protection (atomic across
+processes via a shared `StorageProvider`). Encrypted messages use an
+ephemeral X25519 key per message + HKDF + AES-256-GCM, with forward
+secrecy from key rotation. Every hop is chained into a tamper-evident SHA-256
 attestation chain and recorded to an `AuditLog`. See
 [docs/SECURITY.md](./docs/SECURITY.md) for the full threat model,
 [docs/SECURITY_EXAMPLES.md](./docs/SECURITY_EXAMPLES.md) for complete
@@ -143,7 +146,7 @@ actually get caught.
 - Auto-detected rate limits, delays, and timeouts per model (`BeeConfig`)
 - **Provider Pattern**: `LLMAdapter`, `StorageProvider`, `ContextProvider`, `EventPublisher`/`EventSubscriber` — Hive depends only on these interfaces, never on a concrete backend
 - **Agent-to-agent delegation**: `Bee.delegateTo()` / `BeeManager.delegateToAgent()` / `createDelegationTool()`, with circular-delegation detection and per-Bee `trustLevel`
-- **Secure agent communication**: HMAC-SHA256 signing with replay protection, hybrid RSA-OAEP + AES-256-GCM end-to-end encryption, prompt-injection detection/sanitization, a SHA-256 attestation chain, and a full `AuditLog` — all opt-in and backward compatible
+- **Secure agent communication**: Ed25519 signing with atomic replay protection, forward-secret X25519 + AES-256-GCM end-to-end encryption, prompt-injection detection/sanitization, a SHA-256 attestation chain, and a full `AuditLog`, all opt-in (v0.6.0 changed the security APIs; see [docs/MIGRATION_0.6.md](./docs/MIGRATION_0.6.md))
 - Storage-backed, multi-instance-safe queue with `maxSize` and `ttl`, or a plain in-memory queue when no storage is configured
 - Conversation context persisted across runs via `ContextProvider`
 - Bee lifecycle events (`run:start`, `run:complete`, `run:error`, `retry`, `queue:full`, `queue:expired`, ...) published through `EventPublisher`
@@ -226,12 +229,13 @@ src/
 ├── llm/
 │   └── SimpleLLM.ts      — raw HTTP client for the Gemini API
 ├── security/
-│   ├── MessageSigner.ts          — HMAC-SHA256 signing + nonce replay protection
-│   ├── MessageEncryption.ts      — hybrid RSA-OAEP + AES-256-GCM end-to-end encryption
+│   ├── MessageSigner.ts          — Ed25519 signing + atomic nonce replay protection
+│   ├── MessageEncryption.ts      — ephemeral X25519 + HKDF + AES-256-GCM encryption
 │   ├── PromptInjectionDetector.ts — pattern-based injection detection/sanitization
 │   ├── AttestationChain.ts       — SHA-256 hash chain over signed messages
 │   ├── AuditLog.ts               — security event trail (StorageProvider-backed, optional)
-│   ├── SecureMessage.ts          — SecureAgentMessage helpers + SecurityError
+│   ├── SecureMessage.ts          — SecureAgentMessage seal/open helpers + SecurityError
+│   ├── keys.ts                   — key encoding + encryption-key signatures
 │   └── mTLSConfig.ts             — mTLS credential loading for Redis/Kafka/etc backends
 ├── bee/
 │   ├── BeeConfig.ts            — model limits registry + auto-detection
@@ -239,8 +243,9 @@ src/
 │   ├── BeeManager.ts           — global orchestrator + agent registry/secure delegation
 │   ├── delegationTools.ts      — createDelegationTool() Tool factory
 │   ├── BeeSecurityContext.ts   — per-Bee whitelist/rate limit/tool policy
-│   └── BeeIdentityManager.ts   — RSA-2048 identity registry
-├── types.ts              — Tool, Message, ToolCall, AgentRun, BeeEvent, QueueConfig, DelegationRequest, SecureAgentMessage, BeeIdentity, AttestationChain, AuditEntry, SafePrompt
+│   ├── BeeKeyring.ts           — a Bee's private Ed25519 + rotating X25519 keys
+│   └── BeeIdentityManager.ts   — public-key identity registry
+├── types.ts              — Tool, Message, ToolCall, AgentRun, BeeEvent, QueueConfig, DelegationRequest, SecureAgentMessage, BeeIdentity, BeePublicIdentity, AttestationChain, AuditEntry, SafePrompt
 └── index.ts              — public package exports
 ```
 
@@ -258,6 +263,6 @@ mocked and every provider is exercised through `MockLLM`
 (`tests/__mocks__/MockLLM.ts`) plus the in-memory provider
 implementations, so results are fast and reproducible. The security
 suite (`tests/security/`) is the one place that intentionally does
-real cryptography — genuine RSA-2048 keys, real AES-256-GCM
-encrypt/decrypt, real HMAC-SHA256 signatures — since that's exactly
+real cryptography — genuine Ed25519/X25519 keys, real AES-256-GCM
+encrypt/decrypt, real Ed25519 signatures — since that's exactly
 what needs proving, not mocking.

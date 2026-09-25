@@ -118,16 +118,38 @@ export interface QueueConfig {
 // --- Secure Agent Communication (v0.4.0) -----------------------------------
 
 /**
- * An agent's cryptographic identity. `privateKey` is an RSA-2048 PEM used
- * both for hybrid encryption (unwrapping messages addressed to this Bee)
- * and as the HMAC secret for signing this Bee's own messages. It never
- * leaves the BeeIdentityManager that issued it.
+ * The shareable half of an agent's identity: what other Bees (and
+ * BeeManager) look up in BeeIdentityManager to verify this Bee's
+ * signatures and encrypt messages to it. Contains no secret material.
+ *
+ * All keys are base64 DER (SPKI for public keys, PKCS#8 for private keys).
  */
-export interface BeeIdentity {
+export interface BeePublicIdentity {
   beeName: string;
-  publicKey: string;
-  privateKey: string;
+  /** Ed25519 public key. Verifies this Bee's MessageSigner signatures. */
+  signingPublicKey: string;
+  /** This Bee's *current* X25519 encryption public key. Rotates over time (see BeeKeyring). */
+  encryptionPublicKey: string;
+  /** Identifies `encryptionPublicKey`; carried in each encrypted envelope so the recipient knows which private key to use. */
+  encryptionKeyId: string;
+  /** Ed25519 signature (by `signingPublicKey`) over the current encryption key, so a registry can't substitute its own. */
+  encryptionKeySignature: string;
   trustScore: number;
+}
+
+/**
+ * An agent's full identity, including private keys: a point-in-time
+ * snapshot of a BeeKeyring. Only the owning Bee's BeeKeyring hands this
+ * out - BeeIdentityManager's lookups return BeePublicIdentity only.
+ *
+ * Signing (Ed25519) and encryption (X25519) use separate keypairs; the
+ * encryption keypair rotates, the signing keypair is long-lived.
+ */
+export interface BeeIdentity extends BeePublicIdentity {
+  /** Ed25519 private key. Used ONLY by MessageSigner.sign(). */
+  signingPrivateKey: string;
+  /** X25519 private key matching `encryptionPublicKey`. Used ONLY by MessageEncryption.decrypt(). */
+  encryptionPrivateKey: string;
 }
 
 /**
@@ -146,8 +168,10 @@ export interface SecureAgentMessage {
   encrypted?: boolean;
   iv?: string;
   authTag?: string;
-  /** RSA-OAEP-wrapped AES-256 key, present whenever `encrypted` is true. */
-  encryptedKey?: string;
+  /** Sender's one-time X25519 public key for this message, present whenever `encrypted` is true. */
+  ephemeralPublicKey?: string;
+  /** Which of the recipient's encryption keys this message was encrypted to, present whenever `encrypted` is true. */
+  encryptionKeyId?: string;
 }
 
 export interface SecurityConfig {
