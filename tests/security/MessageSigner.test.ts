@@ -1,5 +1,6 @@
 import { MessageSigner } from '../../src/security/MessageSigner';
 import { BeeIdentityManager } from '../../src/bee/BeeIdentityManager';
+import { InMemoryStorage } from '../../src/storage/InMemoryStorage';
 import { BeeIdentity } from '../../src/types';
 
 describe('MessageSigner', () => {
@@ -108,6 +109,109 @@ describe('MessageSigner', () => {
 
       // Signature/timestamp are still valid, only nonce-replay state was cleared.
       expect(signer.verify('hello', envelope, alice).valid).toBe(true);
+    });
+  });
+
+  describe('nonce eviction', () => {
+    const seenNonceCount = (s: MessageSigner): number =>
+      (s as unknown as { seenNonces: Map<string, number> }).seenNonces.size;
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('evicts expired nonces so history does not grow unbounded', () => {
+      const maxAgeMs = 60_000;
+      let now = 1_000_000;
+      jest.spyOn(Date, 'now').mockImplementation(() => now);
+
+      for (let i = 0; i < 50; i++) {
+        const envelope = signer.sign({ i }, alice);
+        expect(signer.verify({ i }, envelope, alice, { maxAgeMs }).valid).toBe(true);
+      }
+      expect(seenNonceCount(signer)).toBe(50);
+
+      now += maxAgeMs + 1;
+
+      for (let i = 0; i < 5; i++) {
+        const envelope = signer.sign({ fresh: i }, alice);
+        expect(signer.verify({ fresh: i }, envelope, alice, { maxAgeMs }).valid).toBe(true);
+      }
+      // The 50 expired nonces were evicted; only the 5 fresh ones remain.
+      expect(seenNonceCount(signer)).toBe(5);
+    });
+
+    it('still rejects a replay of an unexpired nonce after eviction passes', () => {
+      const envelope = signer.sign('hello', alice);
+      expect(signer.verify('hello', envelope, alice).valid).toBe(true);
+
+      const other = signer.sign('other', alice);
+      expect(signer.verify('other', other, alice).valid).toBe(true);
+
+      expect(signer.verify('hello', envelope, alice).reason).toMatch(/Replay detected/);
+    });
+  });
+
+  describe('nonce persistence', () => {
+    it('rejects a replay across a restart when a StorageProvider is passed', async () => {
+      const storage = new InMemoryStorage();
+      const original = new MessageSigner(storage);
+      await original.ready;
+
+      const envelope = original.sign('hello', alice);
+      expect(original.verify('hello', envelope, alice).valid).toBe(true);
+      await original.flushNoncePersistence();
+
+      const restarted = new MessageSigner(storage);
+      await restarted.ready;
+
+      const replay = restarted.verify('hello', envelope, alice);
+      expect(replay.valid).toBe(false);
+      expect(replay.reason).toMatch(/Replay detected/);
+    });
+
+    it('keeps nonces from several signers sharing the same StorageProvider', async () => {
+      const storage = new InMemoryStorage();
+      const first = new MessageSigner(storage);
+      const second = new MessageSigner(storage);
+      await Promise.all([first.ready, second.ready]);
+
+      const a = first.sign('a', alice);
+      const b = second.sign('b', alice);
+      first.verify('a', a, alice);
+      second.verify('b', b, alice);
+      await Promise.all([first.flushNoncePersistence(), second.flushNoncePersistence()]);
+
+      const restarted = new MessageSigner(storage);
+      await restarted.ready;
+      expect(restarted.verify('a', a, alice).reason).toMatch(/Replay detected/);
+      expect(restarted.verify('b', b, alice).reason).toMatch(/Replay detected/);
+    });
+
+    it('does not reload expired nonces from storage', async () => {
+      const storage = new InMemoryStorage();
+      const original = new MessageSigner(storage);
+      const envelope = original.sign('hello', alice);
+      original.verify('hello', envelope, alice, { maxAgeMs: 1_000 });
+      await original.flushNoncePersistence();
+
+      const realNow = Date.now();
+      const spy = jest.spyOn(Date, 'now').mockImplementation(() => realNow + 5_000);
+      const restarted = new MessageSigner(storage);
+      await restarted.ready;
+      expect((restarted as unknown as { seenNonces: Map<string, number> }).seenNonces.size).toBe(0);
+      spy.mockRestore();
+    });
+
+    it('documents replay window reopens on restart without persistence', () => {
+      const original = new MessageSigner();
+      const envelope = original.sign('hello', alice);
+      expect(original.verify('hello', envelope, alice).valid).toBe(true);
+
+      // Known limitation: a fresh in-memory signer has no nonce history, so
+      // the same envelope is accepted again while its timestamp is in window.
+      const restarted = new MessageSigner();
+      expect(restarted.verify('hello', envelope, alice).valid).toBe(true);
     });
   });
 });

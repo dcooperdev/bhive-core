@@ -16,7 +16,7 @@ against:
 |---|---|---|
 | **Interception** | An attacker with read access to the transport (Redis, a log, a network tap) reads a delegated task | End-to-end hybrid encryption (`MessageEncryption`) - only the recipient's RSA private key can unwrap the message |
 | **Tampering** | An attacker with write access to the transport modifies a message in flight | HMAC-SHA256 signing (`MessageSigner`) - any change to the payload invalidates the signature |
-| **Replay** | An attacker resubmits a previously-intercepted, validly-signed message | Nonce tracking in `MessageSigner.verify()` - a nonce is only ever accepted once |
+| **Replay** | An attacker resubmits a previously-intercepted, validly-signed message | Nonce tracking in `MessageSigner.verify()` - a nonce is only ever accepted once within its validity window (see [Known limitations](#known-limitations) for restarts) |
 | **Prompt injection** | Untrusted input tries to override an agent's instructions ("ignore all previous instructions...") | `PromptInjectionDetector` scans and redacts known patterns before the text reaches any LLM |
 | **Privilege escalation via delegation** | A compromised or misconfigured agent tries to delegate to an agent it shouldn't reach | `BeeSecurityContext` whitelisting (`trustLevel: 'careful'`/`'strict'`), enforced both at the Bee and the BeeManager |
 | **Repudiation / unclear provenance** | "Who actually sent this, and was the chain ever broken?" | `AttestationChain` - a SHA-256 hash chain over every signed message; `AuditLog` - a full record of every security-relevant event |
@@ -51,6 +51,39 @@ adapter pattern this project uses everywhere else).
 wraps a random AES-256 key, so only the holder of the matching RSA
 private key can ever decrypt - not even the sender can decrypt their
 own outbound message after the fact.
+
+## Known limitations
+
+- **Shared HMAC secret within one trust domain.** `MessageSigner` keys
+  HMAC-SHA256 with `BeeIdentity.privateKey`. Despite the field name, that
+  value is used as a *symmetric* secret: whoever can verify a Bee's
+  signatures can also produce them. This is integrity within one trust
+  domain (one `BeeManager`'s `BeeIdentityManager`), not cross-domain
+  asymmetric non-repudiation. A compromised `BeeManager` process can forge
+  any Bee's signature within its domain.
+- **The HMAC secret is also the RSA decryption key.** Because the same
+  `privateKey` PEM keys both `MessageSigner` and `MessageEncryption.decrypt()`,
+  any party holding it for verification can also decrypt that Bee's
+  messages. Within one trust domain that's the same party, but keep it in
+  mind before handing key material to anything outside that domain.
+- **Replay protection is in-memory by default.** `MessageSigner` remembers
+  verified nonces until their envelope's `timestamp + maxAgeMs` and then
+  evicts them, so memory stays bounded. Without persistence, that history
+  is lost on restart, reopening a replay window of up to `maxAgeMs`
+  (5 minutes by default) for messages sent just before the restart. Pass a
+  persistent `StorageProvider` to the constructor
+  (`new MessageSigner(storage)`) and `await signer.ready` before verifying
+  to keep replay protection across restarts. Persistence is best-effort and
+  asynchronous; signers in separate processes sharing one backend can race
+  and lose each other's most recent nonces. `BeeManager`'s built-in signer
+  does not use persistence yet.
+- **No forward secrecy for encrypted messages.** `MessageEncryption` wraps
+  each fresh AES-256 key with the recipient's long-lived RSA-2048 public
+  key (static RSA-OAEP), with no ephemeral key exchange. Anyone who
+  obtains a Bee's RSA private key at time T can decrypt every message
+  encrypted to that key before T, if they recorded the ciphertext. Rotating
+  keys (see below) limits exposure to messages sent under the compromised
+  key.
 
 ## Key management
 
